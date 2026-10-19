@@ -1,0 +1,163 @@
+import QtCore
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls.Basic as Control
+import QtQuick.Dialogs
+import Linphone
+import SettingsCpp 1.0
+import UtilsCpp
+import 'qrc:/qt/qml/Linphone/view/Style/buttonStyle.js' as ButtonStyle
+import "qrc:/qt/qml/Linphone/view/Control/Tool/Helper/utils.js" as Utils
+
+AbstractSettingsLayout {
+	id: mainItem
+	width: parent?.width
+	contentModel: [
+		{
+            //: Carnet  d'adresse CardDAV
+            title: qsTr("settings_contacts_carddav_title"),
+            //: "Ajouter un carnet d’adresse CardDAV pour synchroniser vos contacts Linphone avec un carnet d’adresse tiers."
+            subTitle: qsTr("settings_contacts_carddav_subtitle"),
+			contentComponent: cardDavParametersComponent
+		}
+	]
+	topbarOptionalComponent: topBar
+	property alias carddavGui: mainItem.model
+	property bool isNew: false
+	saveButton.contentItem: StackLayout {
+		id: saveButtonContent
+		currentIndex: 0
+		Text {
+			//: "Save"
+			text: qsTr("save")
+			horizontalAlignment: Text.AlignHCenter
+			verticalAlignment: Text.AlignVCenter
+			font {
+				pixelSize: Typography.b2.pixelSize
+				weight: Typography.b2.weight
+			}
+			color: DefaultStyle.grey_0
+		}
+		BusyIndicator {
+			implicitWidth: parent.height
+			implicitHeight: parent.height
+			Layout.alignment: Qt.AlignCenter
+			indicatorColor: DefaultStyle.grey_0
+			indicatorWidth: Utils.getSizeWithScreenRatio(25)
+		}
+	}
+	onSave: {
+		if (carddavGui.core.isValid()) {
+			carddavGui.core.save()
+		} else {
+            UtilsCpp.showInformationPopup(qsTr("information_popup_error_title"),
+                                          //: "Vérifiez que toutes les informations ont été saisies."
+                                          qsTr("settings_contacts_carddav_popup_invalid_error"), false, mainWindow)
+		}
+	}
+	Connections {
+		enabled: carddavGui
+		target: carddavGui ? carddavGui.core : null
+		function onSaved(success, message) {
+			if (success)
+                UtilsCpp.showInformationPopup(qsTr("information_popup_synchronization_success_title"),
+                                              //: "Le carnet d'adresse CardDAV est synchronisé."
+                                              qsTr("settings_contacts_carddav_synchronization_success_message"), true, mainWindow)
+			else
+                UtilsCpp.showInformationPopup(qsTr("settings_contacts_carddav_popup_synchronization_error_title"),
+                                              //: "Erreur de synchronisation : %1"
+                                              qsTr("settings_contacts_carddav_popup_synchronization_error_message").arg(message), false, mainWindow)
+			mainItem.saveButton.enabled = true
+			saveButtonContent.currentIndex = 0
+		}
+		function onSyncStarted() {
+			mainItem.saveButton.enabled = false
+			saveButtonContent.currentIndex = 1
+		}
+	}
+	Component {
+		id: topBar
+		RowLayout {
+            spacing: Utils.getSizeWithScreenRatio(20)
+			BigButton {
+				style: ButtonStyle.noBackground
+				icon.source: AppIcons.trashCan
+                icon.width: Utils.getSizeWithScreenRatio(32)
+                icon.height: Utils.getSizeWithScreenRatio(32)
+				visible: !isNew
+				onClicked: {
+					var mainWin = UtilsCpp.getMainWindow()
+					mainWin.showConfirmationLambdaPopup("",
+                        //: "Supprimer le carnet d'adresse CardDAV ?"
+                        qsTr("settings_contacts_delete_carddav_server_title"),
+						"",
+						function (confirmed) {
+							if (confirmed) {
+								carddavGui.core.remove()
+								mainItem.container.pop()
+							}
+						}
+					)
+				}
+			}
+		}
+	}
+	
+	Component {
+		id: cardDavParametersComponent
+		ColumnLayout {
+			Layout.fillWidth: true
+            spacing: Utils.getSizeWithScreenRatio(20)
+            Layout.rightMargin: Utils.getSizeWithScreenRatio(44)
+            Layout.topMargin: Utils.getSizeWithScreenRatio(20)
+            Layout.leftMargin: Utils.getSizeWithScreenRatio(64)
+			DecoratedTextField {
+				propertyName: "displayName"
+				propertyOwnerGui: carddavGui
+                //: Nom d'affichage
+                title: qsTr("sip_address_display_name")
+				canBeEmpty: false
+				toValidate: true
+				Layout.fillWidth: true
+			}
+			DecoratedTextField {
+				propertyName: "uri"
+				propertyOwnerGui: carddavGui
+                //: "URL du serveur"
+                title: qsTr("settings_contacts_carddav_server_url_title")
+				canBeEmpty: false
+				toValidate: true
+				Layout.fillWidth: true
+			}
+			DecoratedTextField {
+				propertyName: "username"
+				propertyOwnerGui: carddavGui
+                title: qsTr("username")
+				toValidate: true
+				Layout.fillWidth: true
+			}
+			DecoratedTextField {
+				propertyName: "password"
+				hidden: true
+				propertyOwnerGui: carddavGui
+                title: qsTr("password")
+				toValidate: true
+				Layout.fillWidth: true
+			}
+			DecoratedTextField {
+				propertyName: "realm"
+				propertyOwnerGui: carddavGui
+                //: Domaine d’authentification
+                title: qsTr("settings_contacts_carddav_realm_title")
+				toValidate: true
+				Layout.fillWidth: true
+			}
+			SwitchSetting {
+                //: "Stocker ici les contacts nouvellement crées"
+                titleText: qsTr("settings_contacts_carddav_use_as_default_title")
+				propertyName: "storeNewFriendsInIt"
+				propertyOwnerGui: carddavGui
+			}
+		}
+	}
+}

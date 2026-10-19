@@ -1,0 +1,91 @@
+import QtQuick
+import QtQuick.Layouts
+
+import Linphone
+
+import UtilsCpp
+
+
+// TODO : into Loader
+// =============================================================================
+TextEdit {
+	id: mainItem
+	property ChatMessageContentGui contentGui
+	property ChatGui chatGui: null
+	property string lastTextSelected : ''
+	property string searchedTextPart
+	color: DefaultStyle.main2_700
+	// force restoring cursor in case we click on a mention, otherwise
+	// the cursor stays IBeam
+	onVisibleChanged: if (!visible) UtilsCpp.restoreGlobalCursor()
+	property bool isOnlyEmojis: UtilsCpp.isOnlyEmojis(contentGui.core.utf8Text)
+	font {
+		pixelSize: (contentGui && isOnlyEmojis) ? Typography.emoji.pixelSize : Typography.p1.pixelSize
+		weight: Typography.p1.weight
+	}	
+	// property int removeWarningFromBindingLoop : implicitWidth	// Just a dummy variable to remove meaningless binding loop on implicitWidth
+	
+	visible: contentGui && contentGui.core.isText
+	textMargin: 0
+	readOnly: true
+	selectByMouse: true
+	height: visible ? contentHeight: 0
+	clip: false
+
+	text: contentGui.core.richFormatText
+	onSearchedTextPartChanged: {
+		contentGui.core.setSearchedTextPart(searchedTextPart)
+	}
+
+	textFormat: Text.RichText // To supports links and imgs.
+	wrapMode: TextEdit.Wrap
+	
+	onLinkActivated: (link) => {
+		if (link.startsWith('sip'))
+			UtilsCpp.createCall(link)
+		else if (link.startsWith('mention:')) {
+			var mentionAddress = link.substring(8) // remove "mention:"
+			UtilsCpp.openContactAtAddress(mentionAddress);
+		}
+		else
+			Qt.openUrlExternally(link)
+	}
+	// onSelectedTextChanged:{
+	// 	if(selectedText != '') lastTextSelected = selectedText
+	// }
+	onLinkHovered: {
+		if (hoveredLink !== "") UtilsCpp.setGlobalCursor(Qt.PointingHandCursor)
+		else UtilsCpp.restoreGlobalCursor()
+	}
+	onActiveFocusChanged: {
+		if(activeFocus) {
+			lastTextSelected = ''
+		}
+		else mouseArea.keepLastSelection = false
+		// deselect()
+	}
+	MouseArea {
+		id: mouseArea
+		property bool keepLastSelection: false
+		property int lastStartSelection:0
+		property int lastEndSelection:0
+		anchors.fill: parent
+		propagateComposedEvents: true
+		hoverEnabled: true
+		scrollGestureEnabled: false
+		onContainsMouseChanged: {
+			if (containsMouse) UtilsCpp.setGlobalCursor(Qt.IBeamCursor)
+			else UtilsCpp.restoreGlobalCursor()
+		}
+		cursorShape: mainItem.hoveredLink ? Qt.PointingHandCursor : Qt.IBeamCursor
+		acceptedButtons: Qt.LeftButton
+		onPressed: (mouse) => {
+		// 	if(!keepLastSelection) {
+		// 		lastStartSelection = parent.selectionStart
+		// 		lastEndSelection = parent.selectionEnd
+		// 	}
+			keepLastSelection = true
+			mouse.accepted = false
+		}
+	}
+}

@@ -1,0 +1,113 @@
+################################################################################
+#
+#  Copyright (c) 2017-2024 Belledonne Communications SARL.
+# 
+#  This file is part of linphone-desktop
+#  (see https://www.linphone.org).
+# 
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+# 
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+# 
+#  You should have received a copy of the GNU General Public License
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+################################################################################
+
+#	This script is used for CPack to remove root folders that comes from SDK.
+#	As CPack call install() from SDK, its files are into cmake_install_prefix too.
+#	It is neccessary to use it because CPack doesn't take account of some install()  (those that do the move)
+
+cmake_policy(SET CMP0009 NEW)#Not following symlinks for file()
+IF(POLICY CMP0012)
+    CMAKE_POLICY(SET CMP0012 NEW)#Allow if(ON)
+ENDIF()
+
+set(DO_SIGNING @LINPHONE_BUILDER_SIGNING_IDENTITY@)
+set(DEPLOYQT_PROGRAM  @DEPLOYQT_PROGRAM@)
+
+function(remove_file expression)
+    file(GLOB_RECURSE UNWANTED_FILES ${expression})
+    foreach(F ${UNWANTED_FILES})
+        file(REMOVE ${F})
+    endforeach()
+endfunction()
+
+if(APPLE)
+	find_program(DSYMUTIL_PROGRAM dsymutil)
+	
+	execute_process(COMMAND rsync -a --force "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/Frameworks/" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_LIBDIR@/") #Use rsync to bypass symlinks override issues of frameworks. copy_directory will fail without explicit error...
+	#execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/Frameworks/" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_LIBDIR@/")
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/Frameworks/")
+	
+	execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/include/" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_INCLUDEDIR@/")
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/include/")
+	# move share
+	execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/share/" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_DATAROOTDIR@/")
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/share/")
+	# move mkspecs
+	execute_process(COMMAND ${CMAKE_COMMAND} -E copy_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/mkspecs/" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_DATAROOTDIR@/")
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/mkspecs/")
+	# remove other folders
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/cmake/")
+	execute_process(COMMAND ${CMAKE_COMMAND} -E remove_directory "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/lib/")
+	
+	# Build dSYM files into package
+	# deploy qt dependencies
+	message(STATUS "Execute : @DEPLOYQT_PROGRAM@ ${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@APPLICATION_NAME@.app -qmldir=@LINPHONE_QML_DIR@ -no-strip -verbose=0 -always-overwrite")
+	execute_process(COMMAND @DEPLOYQT_PROGRAM@ "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@APPLICATION_NAME@.app" "-qmldir=@LINPHONE_QML_DIR@" "-no-strip" "-verbose=0" "-always-overwrite")
+	
+	#CPack doesn't sign all files.
+	if (DO_SIGNING)
+		execute_process(COMMAND bash "@CMAKE_SOURCE_DIR@/cmake/install/sign_package.sh" codesign "@LINPHONE_BUILDER_SIGNING_IDENTITY@" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}")
+		execute_process(COMMAND codesign "--entitlements" "@CMAKE_CURRENT_BINARY_DIR@/cmake/install/macos/entitlements.xml" "--force" "--deep" "--timestamp" "--options" "runtime,library" "--verbose" "-s" "@LINPHONE_BUILDER_SIGNING_IDENTITY@" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@APPLICATION_NAME@.app")
+	else()
+		execute_process(COMMAND codesign --force --deep --sign "-" "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@APPLICATION_NAME@.app" )#If not code signed, app can crash because of APPLE on "Code Signature Invalid" (spotted for ARM64)
+	endif()
+elseif(WIN32)
+	message(STATUS "Execute : @DEPLOYQT_PROGRAM@ ${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_BINDIR@/@EXECUTABLE_NAME@.exe --qmldir=@LINPHONE_QML_DIR@ --verbose=0 --no-compiler-runtime --pdb")
+	execute_process(COMMAND @DEPLOYQT_PROGRAM@ "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_BINDIR@/@EXECUTABLE_NAME@.exe" "--qmldir=@LINPHONE_QML_DIR@" "--verbose=0" "--no-compiler-runtime" "--pdb")
+	# --plugindir "${CMAKE_CURRENT_BINARY_DIR}/winqt/plugins"
+	# --dir "${CMAKE_CURRENT_BINARY_DIR}/winqt/"
+	 if(@ENABLE_BUGSPLAT_SYMBOLS_UPLOAD@)
+        message(STATUS "Uploading Bugsplat symbols from ${CPACK_TEMPORARY_INSTALL_DIRECTORY}")
+        execute_process(COMMAND "@CRASHPAD_SYMBOLS_UPLOADER@" -m -b @BUGSPLAT_DATABASE@ -a "@LINPHONEAPP_APPLICATION_NAME@" -v "@LINPHONEAPP_VERSION@" -f "**/*.{pdb,exe,dll}" -d "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_BINDIR@" --clientId "@BUGSPLAT_CLIENT_ID@" --clientSecret "@BUGSPLAT_CLIENT_SECRET@"
+            WORKING_DIRECTORY ${CPACK_TEMPORARY_INSTALL_DIRECTORY}
+            RESULT_VARIABLE CPACK_COMMAND_RESULT
+            COMMAND_ECHO  NONE
+        )
+        if(CPACK_COMMAND_RESULT)
+            message(FATAL_ERROR "Failed to upload symbols! ${CPACK_COMMAND_RESULT}")
+        endif()
+        execute_process(COMMAND "@CRASHPAD_SYMBOLS_UPLOADER@" -m -b @BUGSPLAT_DATABASE@ -a "@LINPHONEAPP_APPLICATION_NAME@" -v "@LINPHONEAPP_VERSION@" -f "**/*.{pdb,exe,dll}" -d "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@CMAKE_INSTALL_LIBDIR@/mediastreamer/plugins" --clientId "@BUGSPLAT_CLIENT_ID@" --clientSecret "@BUGSPLAT_CLIENT_SECRET@"
+            WORKING_DIRECTORY ${CPACK_TEMPORARY_INSTALL_DIRECTORY}
+            RESULT_VARIABLE CPACK_COMMAND_RESULT
+            COMMAND_ECHO  NONE
+        )
+        if(CPACK_COMMAND_RESULT)
+            message(FATAL_ERROR "Failed to upload symbols! ${CPACK_COMMAND_RESULT}")
+        endif()
+    endif()
+
+    #####################################################
+    # Clean all unwanted files to package.
+    #####################################################
+    if(@ENABLE_BUGSPLAT_SYMBOLS_UPLOAD@)
+        remove_file("${CPACK_TEMPORARY_INSTALL_DIRECTORY}/*/*.pdb")
+    else()
+        remove_file("${CPACK_TEMPORARY_INSTALL_DIRECTORY}/*/Qt*.pdb")
+    endif()
+
+     # TODO: remove all pdb when CrashReporter is available. Symbols for crashing are in server so it is not needed for deployment.
+     # if debugging is needed, we could rebuild it and use pdb from local build instead of using official binaries.
+     # Warning: Do not remove files from here like below. NSIS have a check integrity that is done from install() commands.
+    #remove_file("${CPACK_TEMPORARY_INSTALL_DIRECTORY}/*/*.pdb")
+    #remove_file("${CPACK_TEMPORARY_INSTALL_DIRECTORY}/*/*.cmake")
+    #remove_file("${CPACK_TEMPORARY_INSTALL_DIRECTORY}/*/*.lib")
+endif()

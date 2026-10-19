@@ -1,0 +1,14 @@
+if(NOT "@LINPHONE_BUILDER_SIGNING_IDENTITY@" STREQUAL "")
+	set(_APP "${CPACK_TEMPORARY_INSTALL_DIRECTORY}/@LINPHONEAPP_APPLICATION_NAME@.app")
+	execute_process(
+		COMMAND bash "@CMAKE_SOURCE_DIR@/cmake/install/sign_macos_app.sh" "@LINPHONE_BUILDER_SIGNING_IDENTITY@" "${_APP}" "@LINPHONE_ENTITLEMENTS@" "@LINPHONEAPP_EXECUTABLE_NAME@"
+		RESULT_VARIABLE _SIGN_RESULT
+	)
+	if(NOT _SIGN_RESULT EQUAL 0)
+		message(FATAL_ERROR "codesign failed in CPack pre-build (exit ${_SIGN_RESULT})")
+	endif()
+	execute_process(COMMAND codesign --verify --deep --strict "${_APP}" RESULT_VARIABLE _VERIFY_RESULT)
+	if(NOT _VERIFY_RESULT EQUAL 0)
+		message(FATAL_ERROR "codesign --verify failed in CPack pre-build (exit ${_VERIFY_RESULT})")
+	endif()
+endif()

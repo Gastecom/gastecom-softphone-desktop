@@ -1,0 +1,171 @@
+#Build template to use in other job scripts without having to copy same code
+#format = .className: &referenceName | scripts
+#Use = scripts: -*referenceName
+#Example : see .macosx-desktop for the default script and macosx-makefile-package for override
+
+.build_all_script: &build_all_script |
+  ccache -s
+  export Qt6_DIR=~/Qt/$QT_MAC_VER/lib/cmake/Qt6
+  echo $Qt6_DIR
+  export PATH=~/Qt/$QT_MAC_VER/bin:$PATH
+  echo $PATH
+  if [ -d "build" ]; then rm -rf build; fi;
+  mkdir -p build/OUTPUT
+  cd build
+  #SDK Building
+  echo $CI_BUILD_TYPE
+  echo $CMAKE_GENERATOR
+  echo $DEFAULT_MACOS_CMAKE_OPTIONS
+  echo $CMAKE_OPTIONS
+  echo $ADDITIONAL_BUILD_OPTIONS
+  echo $MAKE_RELEASE_FILE_URL
+  echo $RELEASE_FILE
+  cmake .. -G "$CMAKE_GENERATOR" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.3 -DCMAKE_BUILD_TYPE=$CI_BUILD_TYPE $DEFAULT_MACOS_CMAKE_OPTIONS -DLINPHONE_BUILDER_SIGNING_IDENTITY="$MACOS_SIGNING_IDENTITY" -DLINPHONEAPP_APPLICATION_NAME="$APPLICATION_NAME" -DLINPHONEAPP_EXECUTABLE_NAME="$EXECUTABLE_NAME" $XCODE_OPTIONS $CMAKE_OPTIONS $SCHEDULE_CMAKE_OPTIONS $RELEASE_FILE
+  cmake --build . --target install --config $CI_BUILD_TYPE $LBC_NODEBUG_OPTIONS -- $ADDITIONAL_BUILD_OPTIONS
+  ccache -s
+
+.macosx-desktop:
+  stage: build
+  tags: [ "macosx-min-xcode12.2-flat" ]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $DOCKER_UPDATE == null && $SKIP_MACOSX == null
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $DOCKER_UPDATE == null && $SKIP_MACOSX == null
+  script:
+    - *build_all_script
+  artifacts:
+    paths:
+      - build/OUTPUT/*
+    when: always
+    expire_in: 1 week
+
+#################################################
+# On each push
+#################################################
+
+#TODO: reactivate pcrypto when liboqs is fixed for 'Vortex' CPU.
+macosx-ninja:
+  rules:
+    - if: ($CI_PIPELINE_SOURCE == "merge_request_event") && $DOCKER_UPDATE == null && $SKIP_MACOSX == null
+  variables:
+    CMAKE_GENERATOR: Ninja
+    CMAKE_OPTIONS: -DPython3_ROOT_DIR=/opt/bc/pip-packages/ -DENABLE_PQCRYPTO=OFF
+  extends: .macosx-desktop
+
+#################################################
+# Nightly
+#################################################
+
+macosx-makefile:
+  rules:
+    - !reference [.rules-merge-request-manual, rules]
+    - if: $NIGHTLY_MASTER
+    - if: $DEPLOY_PLUGINS
+  variables:
+    CMAKE_GENERATOR: Unix Makefiles
+    CMAKE_OPTIONS: -DPython3_ROOT_DIR=/opt/bc/pip-packages/ -DENABLE_PQCRYPTO=OFF
+    ADDITIONAL_BUILD_OPTIONS: -j$MAKEFILE_JOBS
+  extends: .macosx-desktop
+
+macosx-ninja-novideo:
+  rules:
+    - !reference [.rules-merge-request-manual, rules]
+    - if: $NIGHTLY_MASTER
+  variables:
+    CMAKE_OPTIONS: -DPython3_ROOT_DIR=/opt/bc/pip-packages/ -DENABLE_VIDEO=OFF -DENABLE_PQCRYPTO=OFF
+    CMAKE_GENERATOR: Ninja
+  extends: .macosx-desktop
+
+#macosx-xcode:
+#  extends: .macosx-desktop
+#  variables:
+#    XCODE_OPTIONS: -DPython3_ROOT_DIR=/opt/bc/pip-packages/ -DLINPHONESDK_MACOS_BASE_URL=$MACOS_SNAPSHOTS_URL
+#   CMAKE_GENERATOR: Xcode
+#    ADDITIONAL_BUILD_OPTIONS: -IDEBuildOperationMaxNumberOfConcurrentCompileTasks=$MAX_NUMBER_TASK
+# only:
+#   variables:
+#     - $NIGHTLY_MASTER
+#     - $DEPLOY_RUN_MACOSX
+#      
+
+#################################################
+# Package - Nightly
+#################################################
+# WAIT for QT6 for arm64
+macosx-ninja-package:
+  stage: package
+  tags: [ "macosx-min-xcode12.2-flat" ]
+  needs: []
+  rules:
+    - !reference [.rules-merge-request-manual, rules]
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $DOCKER_UPDATE == null && $SKIP_MACOSX == null
+    - if: $NIGHTLY_MASTER
+    - if: $PACKAGE_MACOSX
+    - if: $DEPLOY_MACOSX
+  variables:
+    CMAKE_OPTIONS: -DPython3_ROOT_DIR=/opt/bc/pip-packages/ -DENABLE_APP_PACKAGING=ON -DENABLE_GPL_THIRD_PARTIES=OFF -DENABLE_G729=ON -DBUGSPLAT_CLIENT_ID=$BUGSPLAT_CLIENT_ID -DBUGSPLAT_CLIENT_SECRET=$BUGSPLAT_CLIENT_SECRET -DBUGSPLAT_DATABASE=$BUGSPLAT_DATABASE
+    RELEASE_FILE: -DLINPHONE_SDK_MAKE_RELEASE_FILE_URL=$MAKE_RELEASE_FILE_URL/$MACOSX_PLATFORM/$APP_FOLDER
+  extends: macosx-ninja
+  script:
+    - if [[ $MAKE_RELEASE_FILE_URL == "" ]]; then export RELEASE_FILE=""; fi
+    - *build_all_script
+  artifacts:
+    when: always
+    paths:
+      - build/OUTPUT/*
+    when: always
+    expire_in: 1 week
+
+macosx-codesigning:
+  stage: signing
+  tags: [ "macosx-min-xcode12.2-flat" ]
+  needs:
+    - macosx-ninja-package
+  rules:
+    - !reference [.rules-merge-request-manual, rules]
+    - if: $NIGHTLY_MASTER
+    - if: $PACKAGE_MACOSX
+    - if: $DEPLOY_MACOSX
+  script:
+    - cd build
+    - codesign --timestamp --options runtime,library --verbose -s "$MACOS_SIGNING_IDENTITY" OUTPUT/macos/Packages/Linphone*.dmg
+    - ./../cmake/install/macos/app_notarization.sh
+  artifacts:
+    when: always
+    paths:
+      - build/OUTPUT/*
+    when: always
+    expire_in: 1 week
+
+#################################################
+# Deploy - Nightly
+#################################################
+
+macosx-deploy:
+ stage: deploy
+ tags: [ "macosx-min-xcode12.2-flat" ]
+ needs:
+   - macosx-codesigning
+ only:
+    variables:
+      - $NIGHTLY_MASTER
+      - $DEPLOY_MACOSX
+ script:
+   - rsync -rlv --ignore-existing build/OUTPUT/macos/Packages/Linphone*.dmg $DEPLOY_SERVER:$UPLOAD_ROOT_PATH/$MACOSX_PLATFORM/$APP_FOLDER
+   - |-
+     if [[ $MAKE_RELEASE_FILE_URL != "" ]]; then
+       rsync -rlv build/OUTPUT/macos/Packages/RELEASE $DEPLOY_SERVER:$UPLOAD_ROOT_PATH/$MACOSX_PLATFORM
+       rsync -rlv build/OUTPUT/macos/Packages/RELEASE $MAIN_DEPLOY_SERVER:$UPLOAD_ROOT_PATH/$MACOSX_PLATFORM
+     fi
+
+
+macosx-makefile-plugins-deploy:
+ stage: deploy
+ tags: [ "macosx-min-xcode12.2-flat" ]
+ needs:
+   - macosx-makefile
+ only:
+    variables:
+      - $DEPLOY_PLUGINS
+ script:
+   - rsync -rlv --ignore-existing build/OUTPUT/plugins/app/*.dylib $DEPLOY_SERVER:$UPLOAD_ROOT_PATH/$MACOSX_PLATFORM/$APP_FOLDER/plugins
+

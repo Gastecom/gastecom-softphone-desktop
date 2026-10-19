@@ -1,0 +1,144 @@
+
+# Gastecom (2026-08-20): instala el certificado propio de firma de Gastecom
+# como "de confianza" (ROOT + TrustedPublisher) durante esta MISMA
+# instalacion, en vez de exigir un .bat aparte con su propio aviso de
+# administrador. Este instalador ya escribe en Program Files/HKLM -exige
+# administrador por si solo-, asi que certutil hereda ese mismo privilegio.
+# @GASTECOM_CODESIGN_PUBLIC_CERT@ llega vacio si no hay certificado
+# configurado (p.ej. una build del CI sin firma): el !if de abajo evalua a
+# falso y esta seccion entera desaparece del instalador, sin dejar rastro.
+!if "@GASTECOM_CODESIGN_PUBLIC_CERT@" != ""
+	SetOutPath "$INSTDIR"
+	; Ruta en formato nativo (backslashes) desde install.cmake: con
+	; forward-slashes ("C:/Users/...") "File" fallaba con "no files found"
+	; pese a que el fichero existia de verdad.
+	File /oname=gastecom-codesign-public.cer "@GASTECOM_CODESIGN_PUBLIC_CERT@"
+	DetailPrint "Instalando el certificado de confianza de Gastecom..."
+	nsExec::ExecToLog '"$SYSDIR\certutil.exe" -addstore -f "ROOT" "$INSTDIR\gastecom-codesign-public.cer"'
+	nsExec::ExecToLog '"$SYSDIR\certutil.exe" -addstore -f "TrustedPublisher" "$INSTDIR\gastecom-codesign-public.cer"'
+!endif
+
+# Application details
+
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@" "" ""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@" "" ""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities" "ApplicationDescription" "@APPLICATION_DESCRIPTION@"
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities" "ApplicationName" "@APPLICATION_NAME@"
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities" "FriendlyAppName" "@APPLICATION_NAME@"
+WriteRegStr HKLM "SOFTWARE\RegisteredApplications" "@APPLICATION_NAME@" "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities"
+WriteRegStr HKLM "SOFTWARE\IM Providers\@APPLICATION_NAME@" "ProcessName" "@EXECUTABLE_NAME@.exe"
+WriteRegStr HKLM "SOFTWARE\IM Providers\@APPLICATION_NAME@" "FriendlyName" "@APPLICATION_NAME@"
+
+
+# PROTOCOL declaration
+
+WriteRegStr HKCR "sip" "" "URL:sip Protocol"
+WriteRegStr HKCR "sip" "URL Protocol" ""
+
+WriteRegStr HKCR "sip-@EXECUTABLE_NAME@" "" "URL:sip-@EXECUTABLE_NAME@ Protocol"
+WriteRegStr HKCR "sip-@EXECUTABLE_NAME@" "URL Protocol" ""
+
+WriteRegStr HKCR "@EXECUTABLE_NAME@-sip" "" "URL:@EXECUTABLE_NAME@-sip Protocol"
+WriteRegStr HKCR "@EXECUTABLE_NAME@-sip" "URL Protocol" ""
+
+WriteRegStr HKCR "@EXECUTABLE_NAME@-config" "" "URL:@EXECUTABLE_NAME@-config Protocol"
+WriteRegStr HKCR "@EXECUTABLE_NAME@-config" "URL Protocol" ""
+; Gastecom (2026-08-20): a esta clave le faltaba Shell\Open\Command. El
+; ProgID de mas abajo (@APPLICATION_NAME@.@EXECUTABLE_NAME@-config) SI lo
+; tiene, pero Windows no lo usa al abrir el enlace desde fuera de la app
+; (navegador, portal web) sin que el usuario elija antes "abrir siempre
+; con esta app" en Configuracion - y esa eleccion no aparecia porque a la
+; clave del protocolo en si (esta de aqui) le faltaba el comando directo.
+; Sintoma real visto: "Necesitas una aplicacion nueva para abrir este
+; vinculo", con boton a la Microsoft Store, en vez de abrir el softphone.
+WriteRegStr HKCR "@EXECUTABLE_NAME@-config\Shell\Open\Command" "" "$\"$INSTDIR\bin\@EXECUTABLE_NAME@.exe$\" $\"%1$\""
+
+WriteRegStr HKCR "sips" "" "URL:sips Protocol"
+WriteRegStr HKCR "sips" "URL Protocol" ""
+
+WriteRegStr HKCR "sips-@EXECUTABLE_NAME@" "" "URL:sips-@EXECUTABLE_NAME@ Protocol"
+WriteRegStr HKCR "sips-@EXECUTABLE_NAME@" "URL Protocol" ""
+
+WriteRegStr HKCR "@EXECUTABLE_NAME@-sips" "" "URL:@EXECUTABLE_NAME@-sips Protocol"
+WriteRegStr HKCR "@EXECUTABLE_NAME@-sips" "URL Protocol" ""
+
+WriteRegStr HKCR "tel" "" "URL:tel Protocol"
+WriteRegStr HKCR "tel" "URL Protocol" ""
+; Gastecom (2026-08-20): mismo bug y mismo arreglo que "-config" arriba -
+; sin esto, el "click to call" de Windows (numeros clicables en Outlook,
+; navegador, Word...) no abre el softphone aunque el protocolo parezca
+; "declarado". Verificado con "-config"; no reprobado especificamente con
+; "tel" porque este PC de pruebas tiene otro softphone (MicroSIP) compitiendo
+; por el mismo protocolo - en los PC sin otra app de telefonia deberia ganar
+; sin preguntar nada.
+WriteRegStr HKCR "tel\Shell\Open\Command" "" "$\"$INSTDIR\bin\@EXECUTABLE_NAME@.exe$\" $\"%1$\""
+
+WriteRegStr HKCR "callto" "" "URL:callto Protocol"
+WriteRegStr HKCR "callto" "URL Protocol" ""
+WriteRegStr HKCR "callto\Shell\Open\Command" "" "$\"$INSTDIR\bin\@EXECUTABLE_NAME@.exe$\" $\"%1$\""
+
+
+# Application protocol handlers
+
+## SIP
+WriteRegStr HKCR "@APPLICATION_NAME@.sip" "" "@APPLICATION_NAME@ sip Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.sip\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sip\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sip\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "sip" "@APPLICATION_NAME@.sip"
+
+## SIP-@EXECUTABLE_NAME@
+WriteRegStr HKCR "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@" "" "@APPLICATION_NAME@ sip-@EXECUTABLE_NAME@ Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "sip-@EXECUTABLE_NAME@" "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@"
+
+## @EXECUTABLE_NAME@-SIP
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sip" "" "@APPLICATION_NAME@ @EXECUTABLE_NAME@-sip Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sip\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sip\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sip\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "@EXECUTABLE_NAME@-sip" "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sip"
+
+## SIPS
+WriteRegStr HKCR "@APPLICATION_NAME@.sips" "" "@APPLICATION_NAME@ sips Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.sips\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sips\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sips\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "sips" "@APPLICATION_NAME@.sips"
+
+## SIPS-@EXECUTABLE_NAME@
+WriteRegStr HKCR "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@" "" "@APPLICATION_NAME@ sips-@EXECUTABLE_NAME@ Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "sips-@EXECUTABLE_NAME@" "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@"
+
+## @EXECUTABLE_NAME@-SIPS
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sips" "" "@APPLICATION_NAME@ @EXECUTABLE_NAME@-sips Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sips\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sips\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sips\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "@EXECUTABLE_NAME@-sips" "@APPLICATION_NAME@.@EXECUTABLE_NAME@-sips"
+
+## @EXECUTABLE_NAME@-CONFIG
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config" "" "@APPLICATION_NAME@ @EXECUTABLE_NAME@-config Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "@EXECUTABLE_NAME@-config" "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config"
+
+## TEL
+WriteRegStr HKCR "@APPLICATION_NAME@.tel" "" "@APPLICATION_NAME@ tel Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.tel\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.tel\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.tel\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "tel" "@APPLICATION_NAME@.tel"
+
+## CALLTO
+WriteRegStr HKCR "@APPLICATION_NAME@.callto" "" "@APPLICATION_NAME@ callto Protocol"
+WriteRegStr HKCR "@APPLICATION_NAME@.callto\Shell" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.callto\Shell\Open" "" ""
+WriteRegStr HKCR "@APPLICATION_NAME@.callto\Shell\Open\Command" "" "$INSTDIR\bin\@EXECUTABLE_NAME@.exe $\"%1$\""
+WriteRegStr HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@\Capabilities\URLAssociations" "callto" "@APPLICATION_NAME@.callto"

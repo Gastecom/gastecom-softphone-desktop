@@ -1,0 +1,76 @@
+[app]
+record_aware=1
+
+[misc]
+aggregate_imdn=1
+hide_empty_chat_rooms=1
+# Servicios de terceros desactivados: este softphone solo habla con el SBC de
+# Gastecom. Dejarlos activos filtraria datos de uso a servidores ajenos.
+log_collection_upload_server_url=
+file_transfer_server_url=
+version_check_url_root=
+
+[net]
+force_ice_disablement=0
+mtu=1300
+
+[rtp]
+accept_any_encryption=1
+
+[sip]
+auto_answer_replacing_calls=1
+auto_net_state_mon=1
+guess_hostname=1
+ping_with_options=0
+register_only_when_network_is_up=1
+use_cpim=1
+# Guarda el HA1 en vez de la contrasena en claro en linphonerc. No es cifrado:
+# el HA1 sigue sirviendo para autenticarse contra el SBC, asi que quien lea el
+# fichero puede registrar un softphone. Lo que evita es que la contrasena en si
+# quede a la vista y se pueda reutilizar en otros sitios.
+# El cifrado de verdad seria VFS, pendiente de decidir (ver agujeros_seguridad.txt).
+# Al cambiar el realm el HA1 deja de valer y hay que reprovisionar el perfil.
+store_ha1_passwd=1
+# SRTP (SDES): es el unico modo verificado contra el SBC. rtpengine reenvia los
+# paquetes SRTP de forma opaca; las claves viajan en el SDP protegido por TLS.
+media_encryption=srtp
+# 2026-10-14: obligatorio. Desde ese dia el SBC ofrece RTP/SAVP en TODAS las
+# entradas a softphones (antes OSRTP-offer, que liblinphone ignoraba y la
+# llamada iba en claro). Con 0, si algo fallaba se aceptaba audio sin cifrar en
+# silencio; con 1 la llamada se rechaza (488) en vez de degradar.
+media_encryption_mandatory=1
+
+[sound]
+ec_filter=MSWebRTCAEC
+
+[ui]
+use_qrcode=0
+# Mostrar solo el usuario, sin el dominio: se ve "110" y no
+# "sip:110@sbcsoftphone.gastecom.es". El dominio siempre es el mismo y para el
+# usuario es ruido.
+# El nombre de la clave enganna: en el PC NO oculta la direccion, la recorta.
+# Las vistas hacen SettingsCpp.hideSipAddresses ? UtilsCpp.getUsername(x) : x,
+# y getUsername() quita el "sip:" y todo lo posterior al ultimo "@".
+# Afecta a la pantalla de llamada (Sticker.qml, usado por las cuatro
+# disposiciones), al historial, al avatar y a la ficha de contacto.
+# Equivale a only_display_sip_uri_username=1 en Android.
+hide_sip_addresses=1
+
+[video]
+auto_resize_preview_to_keep_ratio=1
+max_conference_size=vga
+other_display_mode=Hybrid
+
+[proxy_default_values]
+# El tecnico crea el perfil en el portal de provisioning y entrega usuario y
+# contrasena; el dominio y la ruta ya vienen fijados aqui.
+reg_proxy=<sip:sbcsoftphone.gastecom.es:5091;transport=tls>
+reg_route=<sip:sbcsoftphone.gastecom.es:5091;transport=tls;lr>
+reg_expires=3600
+reg_sendregister=1
+publish=0
+quality_reporting_enabled=0
+avpf_rr_interval=5000
+
+[assistant]
+password_min_length=6

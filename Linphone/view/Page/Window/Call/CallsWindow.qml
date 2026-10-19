@@ -1,0 +1,1917 @@
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Effects
+import QtQuick.Controls.Basic as Control
+import Linphone
+import EnumsToStringCpp
+import UtilsCpp
+import SettingsCpp
+import DesktopToolsCpp
+import "qrc:/qt/qml/Linphone/view/Control/Tool/Helper/utils.js" as Utils
+import "qrc:/qt/qml/Linphone/view/Style/buttonStyle.js" as ButtonStyle
+
+AbstractWindow {
+    id: mainWindow
+    flags: Qt.Window
+    minimumWidth: Utils.getSizeWithScreenRatio(1020)
+    minimumHeight: Utils.getSizeWithScreenRatio(700)
+
+    // modality: Qt.WindowModal
+    property CallGui call
+
+    property ConferenceGui conference: call && call.core.conference || null
+    property bool isConference: call ? call.core.isConference : false
+
+    // Chat related to call
+    property var chatObj
+    property ChatGui chat: chatObj && chatObj.value || null
+
+    property int conferenceLayout: call && call.core.conferenceVideoLayout || 0
+    property bool cameraEnabled: call && call.core.cameraEnabled
+    property bool remoteVideoEnabled: call && call.core.remoteVideoEnabled
+
+    property bool callTerminatedByUser: false
+    property var callState: call ? call.core.state : LinphoneEnums.CallState.Idle
+    property var transferState: call && call.core.transferState
+    property bool startingCall: mainWindow.callState == LinphoneEnums.CallState.OutgoingInit
+        || mainWindow.callState
+        == LinphoneEnums.CallState.OutgoingProgress
+        || mainWindow.callState
+        == LinphoneEnums.CallState.OutgoingRinging
+        || mainWindow.callState
+        == LinphoneEnums.CallState.OutgoingEarlyMedia
+        || mainWindow.callState == LinphoneEnums.CallState.IncomingReceived
+    property Item firstButtonInBottomTab : mainWindow.startingCall ? endCallButton : (videoCameraButton.visible && videoCameraButton.enabled ? videoCameraButton : audioMicrophoneButton)
+    property Item lastButtonInBottomTab : mainWindow.startingCall ? Utils.getLastFocusableItemInItem(controlCallButtons) : endCallButton
+
+    onCallStateChanged: {
+        if (callState === LinphoneEnums.CallState.Connected) {
+            if (middleItemStackView.currentItem.objectName != "inCallItem") {
+                middleItemStackView.replace(inCallItem)
+                bottomButtonsLayout.visible = true
+            }
+            if (call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp
+                    && !mainWindow.isConference && (!call.core.tokenVerified
+                                                    || call.core.isMismatch)) {
+                zrtpValidation.open()
+            }
+        } else if (callState === LinphoneEnums.CallState.StreamsRunning) {
+            if (!mainWindow.chat && (!mainWindow.conference || mainWindow.conference.core.isChatEnabled))
+                mainWindow.chatObj = UtilsCpp.getCurrentCallChat(mainWindow.call)
+        } else if (callState === LinphoneEnums.CallState.Error
+                   || callState === LinphoneEnums.CallState.End) {
+            zrtpValidation.close()
+            callEnded(call)
+        }
+    }
+
+    onTransferStateChanged: {
+        console.log("Transfer state:", transferState)
+        if (mainWindow.transferState === LinphoneEnums.CallState.OutgoingInit) {
+            var callsWin = UtilsCpp.getOrCreateCallsWindow()
+            if (!callsWin)
+                return
+            //: "Transfert en cours, veuillez patienter"
+            callsWin.showLoadingPopup(qsTr("call_transfer_in_progress_toast"))
+        } else if (mainWindow.transferState === LinphoneEnums.CallState.Error
+                   || mainWindow.transferState === LinphoneEnums.CallState.End
+                   || mainWindow.transferState === LinphoneEnums.CallState.Released
+                   || mainWindow.transferState === LinphoneEnums.CallState.Connected) {
+            var callsWin = UtilsCpp.getOrCreateCallsWindow()
+            callsWin.closeLoadingPopup()
+            if (transferState === LinphoneEnums.CallState.Error)
+                UtilsCpp.showInformationPopup(
+                            qsTr("information_popup_error_title"),
+                            //: "Le transfert d'appel a échoué"
+                            qsTr("call_transfer_failed_toast"), false,
+                            mainWindow)
+            else if (transferState === LinphoneEnums.CallState.Connected) {
+                var mainWin = UtilsCpp.getMainWindow()
+                UtilsCpp.smartShowWindow(mainWin)
+                mainWin.transferCallSucceed()
+            }
+        }
+    }
+    onClosing: close => {
+        DesktopToolsCpp.screenSaverStatus = true
+        if (callsModel.haveCall) {
+            close.accepted = false
+            terminateAllCallsDialog.open()
+        }
+        if (middleItemStackView.currentItem.objectName === "waitingRoom")
+        middleItemStackView.replace(inCallItem)
+    }
+    Connections {
+        enabled: activeFocusItem !== null
+        target: activeFocusItem ? activeFocusItem.Keys : null
+        function onPressed(event) {
+            if (rightPanel.contentLoader.item && rightPanel.contentLoader.item.objectName === "dialerPanel"){
+                mainWindow.keyPressedOnDialer(event)
+            }
+            if ((event.key === Qt.Key_Escape || event.key === Qt.Key_Return) && mainWindow.visibility == Window.FullScreen)
+                mainWindow.showNormal()
+        }
+    }
+    
+    signal keyPressedOnDialer(KeyEvent event)
+
+
+    function changeLayout(layoutIndex) {
+        if (layoutIndex == 0) {
+            console.log("Set Grid layout")
+            call.core.lSetConferenceVideoLayout(LinphoneEnums.ConferenceLayout.Grid)
+        } else if (layoutIndex == 1) {
+            console.log("Set AS layout")
+            call.core.lSetConferenceVideoLayout(LinphoneEnums.ConferenceLayout.ActiveSpeaker)
+        } else {
+            console.log("Set audio-only layout", layoutIndex)
+            call.core.lSetConferenceVideoLayout(LinphoneEnums.ConferenceLayout.AudioOnly)
+        }
+    }
+
+    function endCall(callToFinish) {
+        if (callToFinish)
+            callToFinish.core.lTerminate()
+        else {
+            if (!callsModel.haveCall) UtilsCpp.closeCallsWindow()
+        }
+        // var mainWin = UtilsCpp.getMainWindow()
+        // mainWin.goToCallHistory()
+    }
+    function callEnded(call) {
+        if (call && call.core.state === LinphoneEnums.CallState.Error) {
+            middleItemStackView.replace(inCallItem)
+        }
+        if (!callsModel.haveCall) {
+            if (call && call.core.isConference)
+                UtilsCpp.closeCallsWindow()
+            else {
+                bottomButtonsLayout.setButtonsEnabled(false)
+                autoCloseWindow.restart()
+            }
+        } else {
+            if (middleItemStackView.currentItem.objectName === "waitingRoom") {
+                middleItemStackView.replace(inCallItem)
+            }
+            mainWindow.call = callsModel.currentCall
+        }
+    }
+
+    signal setUpConferenceRequested(ConferenceInfoGui conferenceInfo)
+    function setupConference(conferenceInfo) {
+        middleItemStackView.replace(waitingRoom)
+        setUpConferenceRequested(conferenceInfo)
+    }
+
+    function joinConference(uri, options) {
+        if (uri.length === 0)
+            UtilsCpp.showInformationPopup(qsTr("information_popup_error_title"),
+                                          //: "La conférence n'a pas pu démarrer en raison d'une erreur d'uri."
+                                          qsTr("conference_error_empty_uri"),mainWindow)
+        else {
+            UtilsCpp.createCall(uri, options)
+        }
+    }
+    function cancelJoinConference() {
+        if (!callsModel.haveCall) {
+            UtilsCpp.closeCallsWindow()
+        } else {
+            mainWindow.call = callsModel.currentCall
+        }
+        middleItemStackView.replace(inCallItem)
+    }
+    function cancelAfterJoin() {
+        endCall(mainWindow.call)
+    }
+
+    Connections {
+        enabled: !!mainWindow.call
+        target: mainWindow.call ? mainWindow.call.core : null
+        function onSecurityUpdated() {
+            if (mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp) {
+                if (call.core.tokenVerified) {
+                    zrtpValidation.close()
+                    zrtpValidationToast.open()
+                } else {
+                    zrtpValidation.open()
+                }
+            } else {
+                zrtpValidation.close()
+            }
+        }
+        function onTokenVerified() {
+            if (!zrtpValidation.isTokenVerified) {
+                zrtpValidation.securityError = true
+            } else
+                zrtpValidation.close()
+        }
+    }
+
+    Timer {
+        id: autoCloseWindow
+        interval: mainWindow.callTerminatedByUser ? 1500 : 2500
+        onTriggered: {
+            UtilsCpp.closeCallsWindow()
+        }
+    }
+
+    Dialog {
+        id: terminateAllCallsDialog
+        onAccepted: {
+            mainWindow.callTerminatedByUser = true
+            call.core.lTerminateAllCalls()
+        }
+        width: Utils.getSizeWithScreenRatio(278)
+        //: "Terminer tous les appels en cours ?"
+        title: qsTr("call_close_window_dialog_title")
+        //: "La fenêtre est sur le point d'être fermée. Cela terminera tous les appels en cours."
+        text: qsTr("call_close_window_dialog_message")
+    }
+
+    CallProxy {
+        id: callsModel
+        sourceModel: AppCpp.calls
+        onCurrentCallChanged: {
+            if (currentCall) {
+                mainWindow.call = currentCall
+            }
+        }
+        onHaveCallChanged: {
+            if (!haveCall) {
+                mainWindow.callEnded()
+            } else {
+                bottomButtonsLayout.setButtonsEnabled(true)
+            }
+        }
+    }
+
+    component BottomButton: Button {
+        id: bottomButton
+        required property string enabledIcon
+        property string disabledIcon
+        enabled: call != undefined
+        leftPadding: 0
+        rightPadding: 0
+        topPadding: 0
+        bottomPadding: 0
+        checkable: true
+        background: Rectangle {
+            anchors.fill: parent
+            color: bottomButton.enabled ? disabledIcon ? DefaultStyle.grey_500 : bottomButton.pressed || bottomButton.checked ? DefaultStyle.main2_400 : DefaultStyle.grey_500 : DefaultStyle.grey_600
+            radius: Utils.getSizeWithScreenRatio(71)
+        }
+        icon.source: disabledIcon
+                     && bottomButton.checked ? disabledIcon : enabledIcon
+        icon.width: Utils.getSizeWithScreenRatio(32)
+        icon.height: Utils.getSizeWithScreenRatio(32)
+        contentImageColor: DefaultStyle.grey_0
+    }
+    ZrtpAuthenticationDialog {
+        id: zrtpValidation
+        call: mainWindow.call
+        modal: true
+        closePolicy: Popup.NoAutoClose
+    }
+    Timer {
+        id: autoCloseZrtpToast
+        interval: 4000
+        onTriggered: {
+            zrtpValidationToast.y = -zrtpValidationToast.height * 2
+        }
+    }
+    Control.Control {
+        id: zrtpValidationToast
+        // width: Utils.getSizeWithScreenRatio(269)
+        y: -height * 2
+        z: 1
+        topPadding: Utils.getSizeWithScreenRatio(8)
+        bottomPadding: Utils.getSizeWithScreenRatio(8)
+        leftPadding: Utils.getSizeWithScreenRatio(50)
+        rightPadding: Utils.getSizeWithScreenRatio(50)
+        anchors.horizontalCenter: parent.horizontalCenter
+        clip: true
+        function open() {
+            if (mainWindow.isConference)
+                return
+            y = headerItem.height / 2
+            autoCloseZrtpToast.restart()
+        }
+        Behavior on y {
+            NumberAnimation {
+                duration: 1000
+            }
+        }
+        background: Rectangle {
+            anchors.fill: parent
+            color: DefaultStyle.grey_0
+            border.color: DefaultStyle.info_500_main
+            border.width: Utils.getSizeWithScreenRatio(1)
+            radius: Utils.getSizeWithScreenRatio(50)
+        }
+        contentItem: RowLayout {
+            // anchors.centerIn: parent
+            Image {
+                source: AppIcons.trusted
+                Layout.preferredWidth: Utils.getSizeWithScreenRatio(24)
+                Layout.preferredHeight: Utils.getSizeWithScreenRatio(24)
+                fillMode: Image.PreserveAspectFit
+                Layout.fillWidth: true
+            }
+            Text {
+                color: DefaultStyle.info_500_main
+                //: "Appareil authentifié"
+                text: qsTr("call_can_be_trusted_toast")
+                Layout.fillWidth: true
+                font {
+                    pixelSize: Utils.getSizeWithScreenRatio(14)
+                }
+            }
+        }
+    }
+
+    /************************* CONTENT ********************************/
+    Rectangle {
+        anchors.fill: parent
+        color: DefaultStyle.grey_900
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.bottomMargin: Utils.getSizeWithScreenRatio(10)
+            anchors.topMargin: Utils.getSizeWithScreenRatio(10)
+            spacing: Utils.getSizeWithScreenRatio(10)
+            Item {
+                id: headerItem
+                Layout.margins: Utils.getSizeWithScreenRatio(10)
+                Layout.leftMargin: Utils.getSizeWithScreenRatio(20)
+                Layout.fillWidth: true
+                Layout.minimumHeight: Utils.getSizeWithScreenRatio(25)
+                RowLayout {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Utils.getSizeWithScreenRatio(10)
+                    RowLayout {
+                        spacing: Utils.getSizeWithScreenRatio(10)
+                        Loader {
+                            id: callStatusIconLoader
+                            Layout.preferredWidth: Utils.getSizeWithScreenRatio(30)
+                            Layout.preferredHeight: Utils.getSizeWithScreenRatio(30)
+                            sourceComponent: EffectImage {
+                                id: callStatusIcon
+                                anchors.fill: parent
+                                // TODO : change with broadcast or meeting icon when available
+                                // onImageSourceChanged: console.log("image source changed", imageSource)
+                                imageSource: !mainWindow.call
+                                    ? AppIcons.meeting
+                                    : (mainWindow.callState === LinphoneEnums.CallState.End || mainWindow.callState === LinphoneEnums.CallState.Released)
+                                        ? AppIcons.endCall
+                                        : (mainWindow.call.core.paused || mainWindow.callState === LinphoneEnums.CallState.Paused || mainWindow.callState === LinphoneEnums.CallState.PausedByRemote)
+                                            ? AppIcons.pause
+                                            : mainWindow.conference
+                                                ? AppIcons.videoconference
+                                                : mainWindow.call.core.dir === LinphoneEnums.CallDir.Outgoing
+                                                    ? AppIcons.arrowUpRight
+                                                    : AppIcons.arrowDownLeft
+                                colorizationColor: !mainWindow.call
+                                                || mainWindow.call.core.paused
+                                                || mainWindow.callState
+                                                === LinphoneEnums.CallState.Paused
+                                                || mainWindow.callState
+                                                === LinphoneEnums.CallState.PausedByRemote
+                                                || mainWindow.callState
+                                                === LinphoneEnums.CallState.End
+                                                || mainWindow.callState
+                                                === LinphoneEnums.CallState.Released
+                                                || mainWindow.conference ? DefaultStyle.danger_500_main : mainWindow.call.core.dir === LinphoneEnums.CallDir.Outgoing ? DefaultStyle.info_500_main : DefaultStyle.success_500_main
+                                
+                                Binding {
+                                    target: callStatusIcon
+                                    when: middleItemStackView.currentItem.objectName === "waitingRoom"
+                                    property: "imageSource"
+                                    value: AppIcons.videoconference
+                                }
+                            }
+                            Connections {
+                                target: mainWindow
+                                function onCallStateChanged() {
+                                    callStatusIconLoader.active = !callStatusIconLoader.active
+                                    callStatusIconLoader.active = !callStatusIconLoader.active
+                                }
+                            }
+                        }
+                        ColumnLayout {
+                            spacing: Utils.getSizeWithScreenRatio(6)
+                            RowLayout {
+                                spacing: Utils.getSizeWithScreenRatio(10)
+                                Text {
+                                    id: callStatusText
+                                    property string remoteName: mainWindow.call ? qsTr("call_dir").arg(EnumsToStringCpp.dirToString(mainWindow.call.core.dir)) : ""
+                                    Connections {
+                                        target: mainWindow
+                                        onCallStateChanged: {
+                                            if (mainWindow.callState === LinphoneEnums.CallState.Connected || mainWindow.callState === LinphoneEnums.CallState.StreamsRunning)
+                                               callStatusText.remoteName = mainWindow.call.core.remoteName
+                                        }
+                                    }
+
+                                    text: (mainWindow.callState === LinphoneEnums.CallState.End || mainWindow.callState === LinphoneEnums.CallState.Released)
+                                        //: Appel terminé
+                                        ? qsTr("call_ended")
+                                        : mainWindow.call && (mainWindow.call.core.paused)
+                                            ? (mainWindow.conference
+                                               //: Meeting paused
+                                                ? qsTr("conference_paused")
+                                                : mainWindow.callState === LinphoneEnums.CallState.PausedByRemote
+                                                    //: Call paused by remote
+                                                    ? qsTr("call_paused_by_remote")
+                                                    //: Call paused
+                                                    : qsTr("call_paused"))
+                                            : mainWindow.conference
+                                                ? mainWindow.conference.core.subject
+                                                : remoteName
+                                    color: DefaultStyle.grey_0
+                                    font {
+                                        pixelSize: Typography.h3.pixelSize
+                                        weight: Typography.h3.weight
+                                    }
+                                }
+                                Rectangle {
+                                    visible: mainWindow.call
+                                             && (mainWindow.callState
+                                                 === LinphoneEnums.CallState.Connected
+                                                 || mainWindow.callState
+                                                 === LinphoneEnums.CallState.StreamsRunning)
+                                    Layout.fillHeight: true
+                                    Layout.topMargin: Utils.getSizeWithScreenRatio(10)
+                                    Layout.bottomMargin: Utils.getSizeWithScreenRatio(2)
+                                    Layout.preferredWidth: Utils.getSizeWithScreenRatio(2)
+                                    color: DefaultStyle.grey_0
+                                }
+                                Text {
+                                    text: mainWindow.call ? UtilsCpp.formatElapsedTime(mainWindow.call.core.duration) : ""
+                                    color: DefaultStyle.grey_0
+                                    font {
+                                        pixelSize: Typography.h3.pixelSize
+                                        weight: Typography.h3.weight
+                                    }
+                                    visible: mainWindow.callState
+                                             === LinphoneEnums.CallState.Connected
+                                             || mainWindow.callState
+                                             === LinphoneEnums.CallState.StreamsRunning
+                                }
+                                Text {
+                                    Layout.leftMargin: Utils.getSizeWithScreenRatio(14)
+                                    id: conferenceDate
+                                    text: mainWindow.conferenceInfo ? mainWindow.conferenceInfo.core.getStartEndDateString() : ""
+                                    color: DefaultStyle.grey_0
+                                    font {
+                                        pixelSize: Typography.p1.pixelSize
+                                        weight: Typography.p1.weight
+                                        capitalization: Font.Capitalize
+                                    }
+                                }
+                            }
+                            RowLayout {
+                                id: securityStateLayout
+                                spacing: Utils.getSizeWithScreenRatio(5)
+                                visible: false
+                                Connections {
+                                    target: mainWindow
+                                    function onCallStateChanged() {
+                                        if (mainWindow.callState
+                                                === LinphoneEnums.CallState.Connected)
+                                            securityStateLayout.visible = true
+                                        else if (mainWindow.callState
+                                                 === LinphoneEnums.CallState.End
+                                                 || mainWindow.callState
+                                                 === LinphoneEnums.CallState.Released)
+                                            securityStateLayout.visible = false
+                                    }
+                                }
+                                BusyIndicator {
+                                    //: Waiting for encryption
+                                    visible: encryptionStatusText.text === qsTr("call_waiting_for_encryption_info")
+                                    Layout.preferredWidth: Utils.getSizeWithScreenRatio(15)
+                                    Layout.preferredHeight: Utils.getSizeWithScreenRatio(15)
+                                    indicatorColor: DefaultStyle.grey_0
+                                }
+                                EffectImage {
+                                    Layout.preferredWidth: Utils.getSizeWithScreenRatio(15)
+                                    Layout.preferredHeight: Utils.getSizeWithScreenRatio(15)
+                                    colorizationColor: mainWindow.conference
+                                        ?  DefaultStyle.info_500_main
+                                        : mainWindow.call 
+                                            ? mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Srtp 
+                                                ? DefaultStyle.info_500_main 
+                                                : mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp 
+                                                    ? mainWindow.call.core.isMismatch || !mainWindow.call.core.tokenVerified 
+                                                        ? DefaultStyle.warning_600 
+                                                        : DefaultStyle.info_500_main 
+                                                    : DefaultStyle.grey_0 
+                                            : "transparent"
+                                    visible: mainWindow.call
+                                    imageSource: mainWindow.conference
+                                        ?  AppIcons.lockKey
+                                        : mainWindow.call
+                                        ? mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Srtp
+                                            ? AppIcons.lockSimple
+                                            : mainWindow.call && mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp
+                                                ? mainWindow.call.core.isMismatch || !mainWindow.call.core.tokenVerified
+                                                    ? AppIcons.warningCircle
+                                                    : AppIcons.lockKey
+                                                : AppIcons.lockSimpleOpen
+                                        : ""
+                                }
+                                Text {
+                                    id: encryptionStatusText
+                                    text: mainWindow.conference
+                                        ? mainWindow.call.core.conferenceSecurityLevel === LinphoneEnums.ConferenceSecurityLevel.EndToEnd
+                                            //: End to end encrypted meeting
+                                            ? qsTr("conference_end_to_end_encrypted")
+                                            //: Point to point encrypted meeting
+                                            : qsTr("conference_srtp_point_to_point_encrypted")
+                                        : mainWindow.call
+                                            ? mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Srtp
+                                            //: Appel chiffré de point à point
+                                                ? qsTr("call_srtp_point_to_point_encrypted")
+                                                : mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp
+                                                    ? mainWindow.call.core.isMismatch || !mainWindow.call.core.tokenVerified
+                                                    //: Vérification nécessaire
+                                                        ? qsTr("call_zrtp_sas_validation_required")
+                                                        //: Appel chiffré de bout en bout
+                                                        : qsTr("call_zrtp_end_to_end_encrypted")
+                                                    : mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.None
+                                                        //: "Appel non chiffré"
+                                                        ? qsTr("call_not_encrypted")
+                                                        : qsTr("call_waiting_for_encryption_info")
+                                            : ""
+                                    color: mainWindow.conference || mainWindow.call?.core.encryption === LinphoneEnums.MediaEncryption.Srtp
+                                        ? DefaultStyle.info_500_main
+                                        : mainWindow.call
+                                            ? mainWindow.call.core.encryption === LinphoneEnums.MediaEncryption.Zrtp
+                                                ? mainWindow.call.core.isMismatch || !mainWindow.call.core.tokenVerified
+                                                    ? DefaultStyle.warning_600
+                                                    : DefaultStyle.info_500_main
+                                                : DefaultStyle.grey_0
+                                            : DefaultStyle.grey_0
+                                    font {
+                                        pixelSize: Utils.getSizeWithScreenRatio(12)
+                                        weight: Utils.getSizeWithScreenRatio(400)
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: containsMouse ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: {
+                                            if (rightPanel.visible
+                                                    && rightPanel.contentLoader.item.objectName
+                                                    === "encryptionPanel")
+                                                rightPanel.visible = false
+                                            else {
+                                                rightPanel.visible = true
+                                                rightPanel.replace(encryptionPanel)
+                                            }
+                                        }
+                                    }
+                                }
+                                Item {
+                                    Layout.fillWidth: true
+                                }
+                            }
+                        }
+                    }
+                    Item {
+                        Layout.fillWidth: true
+                    }
+
+                    // Button open statistics panel
+                    Button{
+                        id: openStatisticPanelButton
+                        property int quality: mainWindow.call ? mainWindow.call.core.quality : 0
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(40)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(40)
+                        Layout.rightMargin: Utils.getSizeWithScreenRatio(30)
+                        icon.source: quality >= 4 ? AppIcons.cellSignalFull : quality >= 3 ? AppIcons.cellSignalMedium : quality >= 2 ? AppIcons.cellSignalLow : AppIcons.cellSignalNone
+                        colorizationColor: quality >= 2 ? DefaultStyle.grey_0 : DefaultStyle.danger_500_main
+                        style: ButtonStyle.noBackgroundLightBorder
+                        Accessible.name: qsTr("open_statistic_panel_accessible_name")
+                        onClicked: {
+                            if (rightPanel.visible
+                                    && rightPanel.contentLoader.item.objectName
+                                    === "statsPanel")
+                                rightPanel.visible = false
+                            else {
+                                rightPanel.visible = true
+                                rightPanel.replace(statsPanel)
+                            }
+                        }
+                        KeyNavigation.tab: rightPanel.visible ? nextItemInFocusChain() : mainWindow.firstButtonInBottomTab
+                        KeyNavigation.backtab: mainWindow.lastButtonInBottomTab
+                    }
+                }
+
+                // Banner middle of header - screen sharing or record screen
+                Control.Control {
+                    id: screenSharingOrRecordBanner
+                    property var isScreenSharing: mainWindow.conference && mainWindow.conference.core.isLocalScreenSharing 
+                    visible: mainWindow.call
+                        ? !!mainWindow.conference 
+                            ? mainWindow.conference.core.isRecording || isScreenSharing//mainWindow.conference.core.isLocalScreenSharing
+                            : (mainWindow.call.core.recording || mainWindow.call.core.remoteRecording) 
+                        : false
+                    anchors.centerIn: parent
+                    leftPadding: Utils.getSizeWithScreenRatio(14)
+                    rightPadding: Utils.getSizeWithScreenRatio(14)
+                    topPadding: Utils.getSizeWithScreenRatio(6)
+                    bottomPadding: Utils.getSizeWithScreenRatio(6)
+                    background: Rectangle {
+                        anchors.fill: parent
+                        color: DefaultStyle.grey_500
+                        radius: Utils.getSizeWithScreenRatio(10)
+                    }
+                    contentItem: RowLayout {
+                        spacing: Utils.getSizeWithScreenRatio(85)
+                        RowLayout {
+                            spacing: Utils.getSizeWithScreenRatio(15)
+                            EffectImage {
+                                imageSource: screenSharingOrRecordBanner.isScreenSharing
+                                    ? AppIcons.screencast
+                                    : AppIcons.recordFill
+                                colorizationColor: screenSharingOrRecordBanner.isScreenSharing
+                                    ? DefaultStyle.grey_0
+                                    : DefaultStyle.danger_500_main
+                                Layout.preferredWidth: Utils.getSizeWithScreenRatio(24)
+                                Layout.preferredHeight: Utils.getSizeWithScreenRatio(24)
+                            }
+                            Text {
+                                color: screenSharingOrRecordBanner.isScreenSharing
+                                    ? DefaultStyle.grey_0
+                                    : DefaultStyle.danger_500_main
+                                font: Typography.b1
+                                text: mainWindow.call
+                                        ? screenSharingOrRecordBanner.isScreenSharing
+                                            //: "You are sharing your screen"
+                                            ? qsTr("conference_user_is_sharing_screen")
+                                            : mainWindow.call.core.recording
+                                                ? mainWindow.conference
+                                                    //: "You are recording the meeting"
+                                                    ? qsTr("conference_user_is_recording")
+                                                    //: "You are recording the call"
+                                                    : qsTr("call_user_is_recording")
+                                                : mainWindow.conference
+                                                    //: "Someone is recording the meeting"
+                                                    ? qsTr("conference_remote_is_recording")
+                                                    //: "%1 is recording the call"
+                                                    : qsTr("call_remote_recording").arg(mainWindow.call.core.remoteName)
+                                        : ""
+                            }
+                        }
+                        MediumButton {
+                            visible: mainWindow.call
+                                     && mainWindow.call.core.recording || screenSharingOrRecordBanner.isScreenSharing
+                            
+                            text: screenSharingOrRecordBanner.isScreenSharing
+                            //: "Stop sharing"
+                            ? qsTr("call_stop_screen_sharing")
+                            //: "Stop recording"
+                            : qsTr("call_stop_recording")
+                            Accessible.name: screenSharingOrRecordBanner.isScreenSharing ?
+                            //: "Stop screen sharing"
+                            qsTr("stop_screen_sharing_accessible_name")
+                            //: Stop recording
+                            : qsTr("stop_recording_accessible_name") 
+                            style: ButtonStyle.mainLightBorder
+                            onPressed: {
+                                if (screenSharingOrRecordBanner.isScreenSharing) mainWindow.conference.core.lToggleScreenSharing()
+                                else mainWindow.call.core.lStopRecording()
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: Utils.getSizeWithScreenRatio(23)
+                Control.StackView {
+                    id: middleItemStackView
+                    initialItem: inCallItem
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                }
+                CallSettingsPanel {
+                    id: rightPanel
+                    Layout.fillHeight: true
+                    Layout.rightMargin: Utils.getSizeWithScreenRatio(20)
+                    Layout.preferredWidth: Utils.getSizeWithScreenRatio(393)
+                    Layout.topMargin: Utils.getSizeWithScreenRatio(10)
+                    property int currentIndex: 0
+                    visible: false
+                    onVisibleChanged: if(!visible) contentLoader.sourceComponent = null
+                    function replace(id, properties) {
+                        rightPanel.customHeaderButtons = null
+                        contentLoader.sourceComponent = null
+                        contentLoader.sourceComponent = id
+                        for (var key in properties) {
+                            contentLoader.item[key] = properties[key]
+                        }
+                    }
+                    headerStack.currentIndex: 0
+                    headerValidateButtonText: qsTr("add")
+                    KeyNavigation.tab : Utils.isDescendant(nextItemInFocusChain(), rightPanel) ? nextItemInFocusChain() : videoCameraButton
+
+                    // Do not consider padding for chat
+                    // Binding on topPadding {
+                    //     when: rightPanel.contentLoader.item && rightPanel.contentLoader.item.objectName === "chatPanel"
+                    //     value: Utils.getSizeWithScreenRatio(10)
+                    //     restoreMode: Binding.RestoreBindingOrValue
+                    // }
+                    Binding on leftPadding {
+                        when: rightPanel.contentLoader.item && rightPanel.contentLoader.item.objectName === "chatPanel"
+                        value: 0
+                        restoreMode: Binding.RestoreBindingOrValue
+                    }
+                    Binding on rightPadding {
+                        when: rightPanel.contentLoader.item && rightPanel.contentLoader.item.objectName == "chatPanel"
+                        value: 0
+                        restoreMode: Binding.RestoreBindingOrValue
+                    }
+                    Connections {
+                        target: rightPanel.contentLoader
+                        function onItemChanged() {
+                            if (rightPanel.contentLoader.item) {
+                                if (rightPanel.contentLoader.item.objectName === "callTransferPanel") {
+                                    //: "Transférer %1 à…"
+                                    rightPanel.headerTitleText = qsTr("call_transfer_current_call_title").arg(mainWindow.call.core.remoteName)
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "newCallPanel") {
+                                    //: "Nouvel appel"
+                                    rightPanel.headerTitleText = qsTr("call_action_start_new_call")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "dialerPanel") {
+                                    //: "Pavé numérique"
+                                    rightPanel.headerTitleText = qsTr("call_action_show_dialer")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "changeLayoutPanel") {
+                                    //: "Modifier la disposition"
+                                    rightPanel.headerTitleText = qsTr("call_action_change_layout")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "callListPanel") {
+                                    //: "Liste d'appel"
+                                    rightPanel.headerTitleText = qsTr("call_action_go_to_calls_list")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "chatPanel") {
+                                    rightPanel.headerTitleText = ""
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "settingsPanel") {
+                                    //: "Paramètres"
+                                    rightPanel.headerTitleText = qsTr("call_action_go_to_settings")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "screencastPanel") {
+                                    //: "Partage de votre écran"
+                                    rightPanel.headerTitleText = qsTr("conference_action_screen_sharing")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "encryptionPanel") {
+                                    //: Chiffrement
+                                    rightPanel.headerTitleText = qsTr("call_encryption_title")
+                                }
+                                else if (rightPanel.contentLoader.item.objectName === "statsPanel") {
+                                    //: Statistiques
+                                    rightPanel.headerTitleText = qsTr("call_stats_title")
+                                }
+                            }
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "participantListPanel") rightPanel.headerStack.currentIndex = 0
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "callTransferPanel") transferCallButton.checked = false
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "newCallPanel") newCallButton.checked = false
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "callListPanel") callListButton.checked = false
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "screencastPanel") screencastPanelButton.checked = false
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "chatPanel") chatPanelButton.checked = false
+                            if (!rightPanel.contentLoader.item || rightPanel.contentLoader.item.objectName !== "participantListPanel") participantListButton.checked = false
+
+                            // Update tab focus properties
+                            var firstContentFocusableItem = Utils.getFirstFocusableItemInItem(rightPanel.contentLoader.item)
+                            rightPanel.firstContentFocusableItem = firstContentFocusableItem ?? mainWindow.firstButtonInBottomTab
+                            var lastContentFocusableItem = Utils.getLastFocusableItemInItem(rightPanel.contentLoader.item)
+                            if(lastContentFocusableItem != undefined){
+                                lastContentFocusableItem.KeyNavigation.tab = mainWindow.firstButtonInBottomTab
+                            }
+                        }
+                    }
+
+                    // Binding on rightPadding {
+                    //     when: rightPanel.contentLoader.item && rightPanel.contentLoader.item.objectName == "participantListView"
+                    //     value: Utils.getSizeWithScreenRatio(10)
+                    //     restoreMode: Binding.RestoreBindingOrValue
+                    // }
+
+                    Item {
+                        id: numericPadContainer
+                        anchors.bottom: parent.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: childrenRect.height
+                    }
+                }
+            }
+
+            Component {
+                id: callTransferPanel
+                Control.Control {
+                    id: callTransferControl
+                    objectName: "callTransferPanel"
+                    width: parent.width
+
+                    Connections {
+                        target: mainWindow
+                        function onConferenceChanged() {
+                            if (mainWindow.conference && callTransferControl.visible) rightPanel.visible = false
+                        }
+                    }
+
+                    NewCallForm {
+                        id: newCallForm
+                        width: parent.width
+                        height: rightPanel.contentItemHeight
+                        Keys.onEscapePressed: event => {
+                            rightPanel.visible = false
+                            event.accepted = true
+                        }
+                        startGroupButtonVisible: false
+                        displayCurrentCalls: true
+                        searchBarColor: DefaultStyle.grey_0
+                        searchBarBorderColor: DefaultStyle.grey_200
+                        searchBarRightMaring: 0
+                        onContactClicked: contact => {
+                            var callsWin = UtilsCpp.getOrCreateCallsWindow()
+                            if (contact)
+                            //: "Confirmer le transfert"
+                            callsWin.showConfirmationLambdaPopup(qsTr("call_transfer_confirm_dialog_tittle"),
+                                                                //: "Vous allez transférer %1 à %2."
+                                                                qsTr("call_transfer_confirm_dialog_message").arg(mainWindow.call.core.remoteName).arg(contact.core.fullName), "",
+                                function (confirmed) {
+                                    if (confirmed) {
+                                        mainWindow.transferCallToContact(mainWindow.call,contact,newCallForm)
+                                    }
+                                })
+                        }
+                        onTransferCallToAnotherRequested: dest => {
+                            var callsWin = UtilsCpp.getOrCreateCallsWindow()
+                            console.log("transfer to",dest)
+                            callsWin.showConfirmationLambdaPopup(qsTr("call_transfer_confirm_dialog_tittle"),
+                                                                qsTr("call_transfer_confirm_dialog_message").arg(mainWindow.call.core.remoteName).arg(dest.core.remoteName),"",
+                                function (confirmed) {
+                                if (confirmed) {
+                                    mainWindow.call.core.lTransferCallToAnother(dest.core.remoteAddress)
+                                }
+                            })
+                        }
+                        numPadPopup: numPadPopup
+
+                        NumericPadPopup {
+                            id: numPadPopup
+                            parent: numericPadContainer
+                            width: parent.width
+                            roundedBottom: true
+                            lastRowVisible: false
+                            visible: false
+                            Component.onCompleted: parent.height = height
+                        }
+                    }
+                }
+            }
+            Component {
+                id: newCallPanel
+                Control.Control {
+                    objectName: "newCallPanel"
+                    width: parent.width
+                    NewCallForm {
+                        id: newCallForm
+                        width: parent.width
+                        height: rightPanel.contentItemHeight
+                        startGroupButtonVisible: false
+                        searchBarColor: DefaultStyle.grey_0
+                        searchBarBorderColor: DefaultStyle.grey_200
+                        numPadPopup: numericPad
+                        onContactClicked: contact => {
+                            mainWindow.startCallWithContact(contact, false, rightPanel)
+                        }
+                        Connections {
+                            target: mainWindow
+                            function onCallChanged() {
+                                if (rightPanel.contentLoader.item.objectName === "newCallPanel")
+                                    rightPanel.visible = false
+                            }
+                        }
+
+                        NumericPadPopup {
+                            id: numericPad
+                            width: parent.width
+                            parent: numericPadContainer
+                            roundedBottom: true
+                            visible: newCallForm.searchBar.numericPadButton.checked
+                            onLaunchCall: {
+                                rightPanel.visible = false
+                                UtilsCpp.createCall(newCallForm.searchBar.text)
+                            }
+                            Component.onCompleted: parent.height = height
+                        }
+                    }
+                }
+            }
+            Component {
+                id: dialerPanel
+                Control.Control {
+                    id: dialerPanelContent
+                    objectName: "dialerPanel"
+                    width: parent.width
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    FocusScope {
+                        width: parent.width
+                        height: rightPanel.contentItemHeight
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: Utils.getSizeWithScreenRatio(41)
+                            Item{Layout.fillHeight: true}
+                            SearchBar {
+                                id: searchBar
+                                height: Utils.getSizeWithScreenRatio(45)
+                                magnifierVisible: false
+                                color: DefaultStyle.grey_0
+                                borderColor: DefaultStyle.grey_200
+                                placeholderText: ""
+                                numericPadPopup: numPad
+                                numericPadButton.visible: false
+                                enabled: false
+                            }
+                            NumericPad {
+                                id: numPad
+                                Layout.alignment: Qt.AlignHCenter | Qt.AlignBottom
+                                Layout.bottomMargin: Utils.getSizeWithScreenRatio(18)
+                                currentCall: callsModel.currentCall
+                                lastRowVisible: false
+                                onLaunchCall: {
+                                    UtilsCpp.createCall(dialerTextInput.text)
+                                }
+                                Component.onCompleted: parent.height = height
+                                Connections {
+                                    target: mainWindow
+                                    function onKeyPressedOnDialer(event) {
+                                        if (event.modifiers & Qt.KeypadModifier) {
+                                            if (event.key === Qt.Key_0) {
+                                                numPad.keypadKeyPressedAtIndex(10)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_1) {
+                                                numPad.keypadKeyPressedAtIndex(0)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_2) {
+                                                numPad.keypadKeyPressedAtIndex(1)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_3) {
+                                                numPad.keypadKeyPressedAtIndex(2)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_4) {
+                                                numPad.keypadKeyPressedAtIndex(3)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_5) {
+                                                numPad.keypadKeyPressedAtIndex(4)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_6) {
+                                                numPad.keypadKeyPressedAtIndex(5)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_7) {
+                                                numPad.keypadKeyPressedAtIndex(6)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_8) {
+                                                numPad.keypadKeyPressedAtIndex(7)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_9) {
+                                                numPad.keypadKeyPressedAtIndex(8)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_Asterisk) {
+                                                numPad.keypadKeyPressedAtIndex(9)
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_Plus) {
+                                                numPad.buttonPressed("+")
+                                                event.accepted = true
+                                            }
+                                            if (event.key === Qt.Key_Enter) {
+                                                numPad.launchCall()
+                                                event.accepted = true
+                                            }
+                                        }
+                                        if (event.key === Qt.Key_Backspace) {
+                                            numPad.wipe()
+                                            event.accepted = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Component {
+                id: changeLayoutPanel
+                ChangeLayoutForm {
+                    id: changeLayoutPanel
+                    objectName: "changeLayoutPanel"
+                    width: parent.width
+                    call: mainWindow.call
+                    Connections {
+                        target: mainWindow
+                        function onConferenceChanged() {
+                            if (mainWindow.conference && changeLayoutPanel.visible) rightPanel.visible = false
+                        }
+                    }
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    onChangeLayoutRequested: index => {
+                        mainWindow.changeLayout(index)
+                    }
+                }
+            }
+            Component {
+                id: callListPanel
+                ColumnLayout {
+                    objectName: "callListPanel"
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    spacing: 0
+                    Component {
+                        id: mergeCallPopupButton
+                        PopupButton {
+                            visible: callsModel.count >= 2 && !callsModel.haveNonAdminMeeting
+                            id: popupbutton
+                            popup.contentItem: IconLabelButton {
+                                icon.source: AppIcons.arrowsMerge
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                //: call_action_merge_calls
+                                text: qsTr("Merger tous les appels")
+                                textSize: Utils.getSizeWithScreenRatio(14)
+                                onClicked: {
+                                    callsModel.lMergeAll()
+                                    popupbutton.close()
+                                }
+                            }
+                        }
+                    }
+                    RoundedPane {
+                        Layout.fillWidth: true
+                        Layout.maximumHeight: rightPanel.height
+                        visible: callList.contentHeight > 0
+                        leftPadding: Utils.getSizeWithScreenRatio(16)
+                        rightPadding: Utils.getSizeWithScreenRatio(6)
+                        topPadding: Utils.getSizeWithScreenRatio(15)
+                        bottomPadding: Utils.getSizeWithScreenRatio(16)
+
+                        Layout.topMargin: Utils.getSizeWithScreenRatio(15)
+                        Layout.bottomMargin: Utils.getSizeWithScreenRatio(16)
+                        Layout.leftMargin: Utils.getSizeWithScreenRatio(16)
+                        Layout.rightMargin: Utils.getSizeWithScreenRatio(16)
+
+                        contentItem: CallListView {
+                            id: callList
+                        }
+                    }
+                    Item {
+                        Layout.fillHeight: true
+                    }
+                    Connections {
+                        target: rightPanel.contentLoader
+                        function onItemChanged() {
+                            if (rightPanel.contentLoader.item.objectName === "callListPanel") {
+                                rightPanel.customHeaderButtons = mergeCallPopupButton.createObject(rightPanel)
+                            }
+                        }
+                    }
+                }
+            }
+            Component {
+                id: chatPanel
+                Control.Control {
+                    objectName: "chatPanel"
+                    width: parent.width
+                    Component.onCompleted: chatView.forceActiveFocus()
+                    contentItem: SelectedChatView {
+                        id: chatView
+                        width: parent.width
+                        height: rightPanel.contentItemHeight
+                        Keys.onEscapePressed: event => {
+                            rightPanel.visible = false
+                            event.accepted = true
+                        }
+                        call: mainWindow.call
+                        chat: mainWindow.chat
+
+                        Connections {
+                            enabled: rightPanel.contentLoader.item.objectName === "chatPanel"
+                            target: chatView.callHeaderContent
+                            function onHeightChanged() {
+                                rightPanel.headerStack.height = chatView.callHeaderContent.height
+                            }
+
+                        }
+                    }
+                    Connections {
+                        target: rightPanel.contentLoader
+                        function onItemChanged() {
+                            if (rightPanel.contentLoader.item.objectName === "chatPanel") {
+                                rightPanel.customHeaderButtons = chatView.callHeaderContent
+                                rightPanel.headerStack.height = chatView.callHeaderContent.height
+                            }
+                        }
+                    }
+                }
+            }
+            Component {
+                id: settingsPanel
+                MultimediaSettings {
+                    id: inSettingsPanel
+                    objectName: "settingsPanel"
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    call: mainWindow.call
+                    height: childrenRect.height
+                    width: parent.width
+                }
+            }
+            Component {
+                id: screencastPanel
+                Control.Control {
+                    id: screencastControl
+                    objectName: "screencastPanel"
+                    width: parent.width
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    Connections {
+                        target: mainWindow
+                        function onConferenceChanged() {
+                            if (mainWindow.conference && screencastControl.visible) rightPanel.visible = false
+                        }
+                    }
+                    contentItem: ScreencastSettings {
+                        id: screencastsettings
+                        anchors.topMargin: Utils.getSizeWithScreenRatio(16)
+                        width: parent.width
+                        call: mainWindow.call
+                        onIsLocalScreenSharingChanged:  {
+                            // Check if component is ready as well so we can reopen the panel after starting sharing screen
+                            // and change shared window or screen if needed
+                            if (isLocalScreenSharing && status === Component.Ready) rightPanel.visible = false
+                        }
+                    }
+                }
+            }
+            Component {
+                id: participantListPanel
+                Control.Control {
+                    id: participantControl
+                    width: parent.width
+                    objectName: "participantListPanel"
+                    Keys.onEscapePressed: event => {
+                        rightPanel.visible = false
+                        event.accepted = true
+                    }
+                    Connections {
+                        target: mainWindow
+                        function onConferenceChanged() {
+                            if (!mainWindow.conference && participantControl.visible) rightPanel.visible = false
+                        }
+                    }
+                    Control.StackView {
+                        id: participantsStack
+                        width: parent.width
+                        height: rightPanel.contentItemHeight
+                        // anchors.fill: parent
+                        // anchors.bottomMargin: Utils.getSizeWithScreenRatio(16)
+                        // anchors.leftMargin: Utils.getSizeWithScreenRatio(17)
+                        // anchors.rightMargin: Utils.getSizeWithScreenRatio(17)
+                        initialItem: participantListComp
+                        onCurrentItemChanged: rightPanel.headerStack.currentIndex = currentItem.Control.StackView.index
+                        property list<string> selectedParticipants
+
+                        Connections {
+                            target: rightPanel
+                            function onReturnRequested() {
+                                participantsStack.pop()
+                            }
+                        }
+
+                        Component {
+                            id: participantListComp
+                            ParticipantListView {
+                                id: participantList
+                                objectName: "participantListView"
+                                call: mainWindow.call
+                                height: contentHeight
+                                width: parent.width
+                                rightMargin: 0
+                                Component {
+                                    id: headerbutton
+                                    PopupButton {
+                                        popup.contentItem: IconLabelButton {
+                                            icon.source: AppIcons.shareNetwork
+                                            //: Partager le lien de la réunion
+                                            text: qsTr("conference_share_link_title")
+                                            onClicked: {
+                                                UtilsCpp.copyToClipboard(mainWindow.conference ? mainWindow.conference.core.uri : mainWindow.call.core.remoteAddress)
+                                                //: Copié
+                                                showInformationPopup(qsTr("copied"),
+                                                //: Le lien de la réunion a été copié dans le presse-papier
+                                                qsTr("information_popup_meeting_address_copied_to_clipboard"),true)
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                onVisibleChanged: if (visible) {
+                                    rightPanel.customHeaderButtons = headerbutton.createObject(rightPanel)
+                                    //: "Participants (%1)"
+                                    rightPanel.headerTitleText = qsTr("conference_participants_list_title").arg(count)
+                                }
+                                onAddParticipantRequested: participantsStack.push(addParticipantComp)
+                                onCountChanged: {
+                                    rightPanel.headerTitleText = qsTr("conference_participants_list_title").arg(count)
+                                }
+                                Connections {
+                                    target: participantsStack
+                                    function onCurrentItemChanged() {
+                                        if (participantsStack.currentItem == participantList)
+                                            rightPanel.headerTitleText = qsTr("conference_participants_list_title").arg(participantList.count)
+                                    }
+                                }
+                                Connections {
+                                    target: rightPanel
+                                    function onValidateRequested() {
+                                        participantList.model.addAddresses(participantsStack.selectedParticipants)
+                                        participantsStack.pop()
+                                    }
+                                }
+                            }
+                        }
+                        Component {
+                            id: addParticipantComp
+                            AddParticipantsForm {
+                                id: addParticipantLayout
+                                // height: childrenRect.height
+                                // width: parent.width
+                                searchBarColor: DefaultStyle.grey_0
+                                searchBarBorderColor: DefaultStyle.grey_200
+                                onSelectedParticipantsCountChanged: {
+                                    rightPanel.headerSubtitleText = qsTr("group_call_participant_selected", '', selectedParticipantsCount).arg(selectedParticipantsCount)
+                                    participantsStack.selectedParticipants = selectedParticipants
+                                }
+                                Connections {
+                                    target: participantsStack
+                                    function onCurrentItemChanged() {
+                                        if (participantsStack.currentItem == addParticipantLayout) {
+                                            rightPanel.headerTitleText = qsTr("meeting_schedule_add_participants_title")
+                                            rightPanel.headerSubtitleText = qsTr("group_call_participant_selected", '', addParticipantLayout.selectedParticipants.length).arg(addParticipantLayout.selectedParticipants.length)
+                                        } else {
+                                            rightPanel.headerSubtitleText = ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Component {
+                id: encryptionPanel
+                EncryptionSettings {
+                    objectName: "encryptionPanel"
+                    call: mainWindow.call
+                    width: parent.width
+                    onEncryptionValidationRequested: zrtpValidation.open()
+                }
+            }
+            Component {
+                id: statsPanel
+                CallStatistics {
+                    objectName: "statsPanel"
+                    width: parent.width
+                    call: mainWindow.call
+                }
+            }
+            Component {
+                id: waitingRoom
+                WaitingRoom {
+                    id: waitingRoomIn
+                    objectName: "waitingRoom"
+                    Layout.alignment: Qt.AlignCenter
+                    onSettingsButtonCheckedChanged: {
+                        if (settingsButtonChecked) {
+                            rightPanel.visible = true
+                            rightPanel.replace(settingsPanel, {"forceUpdatingDeviceWithoutSaving": true})
+                        } else {
+                            rightPanel.visible = false
+                        }
+                    }
+                    Binding {
+                        target: callStatusText
+                        when: middleItemStackView.currentItem.objectName === "waitingRoom"
+                        property: "text"
+                        value: waitingRoomIn.conferenceInfo ? waitingRoomIn.conferenceInfo.core.subject : ''
+                    }
+                    Binding {
+                        target: conferenceDate
+                        when: middleItemStackView.currentItem.objectName === "waitingRoom"
+                        property: "text"
+                        value: waitingRoomIn.conferenceInfo ? waitingRoomIn.conferenceInfo.core.startEndDateString : ''
+                    }
+                    Connections {
+                        target: rightPanel
+                        function onVisibleChanged() {
+                            if (!rightPanel.visible) {
+                                waitingRoomIn.settingsButtonChecked = false
+                            }
+                        }
+                    }
+                    Connections {
+                        target: mainWindow
+                        function onSetUpConferenceRequested(conferenceInfo) {
+                            waitingRoomIn.conferenceInfo = conferenceInfo
+                        }
+                    }
+                    onJoinConfRequested: uri => {
+                        mainWindow.joinConference(uri, {
+                            "microEnabled": microEnabled,
+                            "localVideoEnabled": localVideoEnabled
+                        })
+                    }
+                    onCancelJoiningRequested: mainWindow.cancelJoinConference()
+                    onCancelAfterJoinRequested: mainWindow.cancelAfterJoin()
+                }
+            }
+            Component {
+                id: inCallItem
+                Loader {
+                    objectName: "inCallItem"
+                    asynchronous: true
+                    sourceComponent: Item {
+                        CallLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Utils.getSizeWithScreenRatio(20)
+                            anchors.rightMargin: rightPanel.visible ? 0 : Utils.getSizeWithScreenRatio(10) // Grid and AS have 10 in right margin (so apply -10 here)
+                            anchors.topMargin: Utils.getSizeWithScreenRatio(10)
+                            call: mainWindow.call
+                            callTerminatedByUser: mainWindow.callTerminatedByUser
+                        }
+                    }
+                }
+            }
+
+
+            // -----------------------------------------------------------------------------
+            //  Bottom round buttons
+            // -----------------------------------------------------------------------------
+            RowLayout {
+                id: bottomButtonsLayout
+                Layout.alignment: Qt.AlignHCenter
+                spacing: Utils.getSizeWithScreenRatio(58)
+                visible: middleItemStackView.currentItem.objectName == "inCallItem"
+                property bool moreOptionsButtonVisibility: true
+
+                function refreshLayout() {
+                    if (mainWindow.callState === LinphoneEnums.CallState.Connected
+                            || mainWindow.callState === LinphoneEnums.CallState.StreamsRunning
+                            || mainWindow.callState === LinphoneEnums.CallState.Paused
+                            || mainWindow.callState === LinphoneEnums.CallState.PausedByRemote) {
+                        connectedCallButtons.visible = bottomButtonsLayout.visible
+                        moreOptionsButtonVisibility = bottomButtonsLayout.visible
+                        bottomButtonsLayout.layoutDirection = Qt.RightToLeft
+                    } else if (mainWindow.callState === LinphoneEnums.CallState.OutgoingInit
+                               || mainWindow.callState === LinphoneEnums.CallState.IncomingReceived) {
+                        connectedCallButtons.visible = false
+                        bottomButtonsLayout.layoutDirection = Qt.LeftToRight
+                        moreOptionsButtonVisibility = false
+                    }
+                }
+
+                Connections {
+                    target: mainWindow
+                    function onCallStateChanged() {
+                        bottomButtonsLayout.refreshLayout()
+                    }
+                    function onCallChanged() {
+                        bottomButtonsLayout.refreshLayout()
+                    }
+                }
+                function setButtonsEnabled(enabled) {
+                    for (var i = 0; i < children.length; ++i) {
+                        children[i].enabled = enabled
+                    }
+                }
+
+                // End call button
+                RowLayout {
+                    spacing: Utils.getSizeWithScreenRatio(10)
+                    BigButton {
+                        id: acceptCallButton
+                        visible: mainWindow.callState === LinphoneEnums.CallState.IncomingReceived
+                        Layout.row: 0
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        //: "Accepter l'appel"
+                        ToolTip.text: qsTr("call_action_accept_call")
+                        Accessible.name: qsTr("call_action_accept_call")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(75)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        radius: Utils.getSizeWithScreenRatio(71)
+                        style: ButtonStyle.phoneGreenLightBorder
+                        Layout.column: mainWindow.startingCall ? 0 : bottomButtonsLayout.columns - 1
+                        KeyNavigation.tab: mainWindow.startingCall ? (videoCameraButton.visible && videoCameraButton.enabled ? videoCameraButton : audioMicrophoneButton) : openStatisticPanelButton
+                        KeyNavigation.backtab:endCallButton
+                        onClicked: {
+                            mainWindow.call.core.lAccept(false)
+                        }
+                    }
+                    BigButton {
+                        id: endCallButton
+                        focus: true
+                        Layout.row: 0
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        //: "Terminer l'appel"
+                        ToolTip.text: qsTr("call_action_end_call")
+                        Accessible.name: qsTr("call_action_end_call")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(75)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        radius: Utils.getSizeWithScreenRatio(71)
+                        style: ButtonStyle.phoneRedLightBorder
+                        Layout.column: mainWindow.startingCall ? 0 : bottomButtonsLayout.columns - 1
+                        KeyNavigation.tab: mainWindow.startingCall ? (acceptCallButton.visible ? acceptCallButton : videoCameraButton.visible && videoCameraButton.enabled ? videoCameraButton : audioMicrophoneButton) : openStatisticPanelButton
+                        KeyNavigation.backtab: mainWindow.startingCall ? rightPanel.visible ? Utils.getLastFocusableItemInItem(rightPanel) : nextItemInFocusChain(false): callListButton
+                        onClicked: {
+                            mainWindow.callTerminatedByUser = true
+                            mainWindow.endCall(mainWindow.call)
+                        }
+                    }
+                }
+
+
+                // -----------------------------------------------------------------------------
+                //  Group button: pauseCall, transfertCall, newCall, callList
+                // -----------------------------------------------------------------------------
+                RowLayout {
+                    id: connectedCallButtons
+                    visible: false
+                    Layout.row: 0
+                    Layout.column: 1
+                    spacing: Utils.getSizeWithScreenRatio(10)
+
+                    // Pause call button
+                    CheckableButton {
+                        id: pauseButton
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        //: "Reprendre l'appel"
+                        ToolTip.text: checked ? qsTr("call_action_resume_call")
+                                                //: "Mettre l'appel en pause"
+                                              : qsTr("call_action_pause_call")
+                        Accessible.name: checked ? qsTr("call_action_resume_call") : qsTr("call_action_pause_call")
+                        enabled: mainWindow.conference
+                                 || mainWindow.callState != LinphoneEnums.CallState.PausedByRemote
+                        icon.source: enabled
+                                     && checked ? AppIcons.play : AppIcons.phonePause
+                        checked: mainWindow.call
+                                 && mainWindow.callState == LinphoneEnums.CallState.Paused
+                                 || mainWindow.callState == LinphoneEnums.CallState.Pausing
+                                 || (!mainWindow.conference
+                                     && mainWindow.callState
+                                     == LinphoneEnums.CallState.PausedByRemote)
+                        color: enabled ? DefaultStyle.grey_500 : DefaultStyle.grey_600
+                        pressedColor: enabled ? DefaultStyle.success_500_main : DefaultStyle.grey_600
+                        hoveredColor: enabled ? DefaultStyle.main2_400 : DefaultStyle.grey_600
+                        onClicked: {
+                            mainWindow.call.core.lSetPaused(!mainWindow.call.core.paused)
+                        }
+                        KeyNavigation.backtab: moreOptionsButton
+                    }
+
+                    // Transfert call button
+                    CheckableButton {
+                        id: transferCallButton
+                        visible: !mainWindow.conference
+                        icon.source: AppIcons.transferCall
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        contentImageColor: DefaultStyle.grey_0
+                        //: "Transférer l'appel"
+                        ToolTip.text: qsTr("call_action_transfer_call")
+                        Accessible.name: qsTr("call_action_transfer_call")
+                        onToggled: {
+                            console.log("checked transfer changed", checked)
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(callTransferPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                    }
+
+                    // New call button
+                    CheckableButton {
+                        id: newCallButton
+                        checkable: true
+                        icon.source: AppIcons.newCall
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        //: "Initier un nouvel appel"
+                        ToolTip.text: qsTr("call_action_start_new_call_hint")
+                        Accessible.name: qsTr("call_action_start_new_call_hint")
+                        onToggled: {
+                            console.log("checked newcall changed", checked)
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(newCallPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                    }
+
+                    // Call list button
+                    CheckableButton {
+                        id: callListButton
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        checkable: true
+                        icon.source: AppIcons.callList
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        //: "Afficher la liste d'appels"
+                        ToolTip.text: qsTr("call_display_call_list_hint")
+                        Accessible.name: qsTr("call_display_call_list_hint")
+                        onToggled: {
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(callListPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                        KeyNavigation.tab: mainWindow.startingCall ? nextItemInFocusChain() : endCallButton
+                    }
+                }
+
+                // -----------------------------------------------------------------------------
+                //  Group button: Video, audio, screensharing, chat, raiseHand, reaction, participantList, callOptions
+                // -----------------------------------------------------------------------------
+                RowLayout {
+                    id: controlCallButtons
+                    Layout.row: 0
+                    Layout.column: mainWindow.startingCall ? bottomButtonsLayout.columns - 1 : 0
+                    spacing: Utils.getSizeWithScreenRatio(10)
+
+                    // Video camera button
+                    CheckableButton {
+                        id: videoCameraButton
+                        visible: SettingsCpp.videoEnabled
+                        enabled: mainWindow.conferenceInfo
+                                 || (mainWindow.callState === LinphoneEnums.CallState.Connected
+                                     || mainWindow.callState
+                                     === LinphoneEnums.CallState.StreamsRunning)
+                        iconUrl: AppIcons.videoCamera
+                        checkedIconUrl: AppIcons.videoCameraSlash
+                        //: "Désactiver la vidéo"
+                        //: "Activer la vidéo"
+                        ToolTip.text: mainWindow.cameraEnabled ? qsTr("call_deactivate_video_hint") : qsTr("call_activate_video_hint")
+                        Accessible.name: mainWindow.cameraEnabled ? qsTr("call_deactivate_video_hint") : qsTr("call_activate_video_hint")
+                        checked: !mainWindow.cameraEnabled
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        onClicked: mainWindow.call.core.lSetCameraEnabled(!mainWindow.call.core.cameraEnabled)
+                    }
+
+                    // Audio microphone button
+                    CheckableButton {
+                        id: audioMicrophoneButton
+                        iconUrl: AppIcons.microphone
+                        checkedIconUrl: AppIcons.microphoneSlash
+                        ToolTip.text: mainWindow.call && mainWindow.call.core.microphoneMuted
+                            //: "Activer le micro"
+                            ? qsTr("call_activate_microphone")
+                            //: "Désactiver le micro"
+                            : qsTr("call_deactivate_microphone")
+                        Accessible.name: mainWindow.call && mainWindow.call.core.microphoneMuted ? qsTr("call_activate_microphone") : qsTr("call_deactivate_microphone")
+                        checked: mainWindow.call && mainWindow.call.core.microphoneMuted
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        onClicked: mainWindow.call.core.lSetMicrophoneMuted(
+                                       !mainWindow.call.core.microphoneMuted)
+                        KeyNavigation.backtab: videoCameraButton.visible && videoCameraButton.enabled ? videoCameraButton : nextItemInFocusChain(false)
+                    }
+
+                    // Screen cast button
+                    CheckableButton {
+                        id: screencastPanelButton
+                        iconUrl: AppIcons.screencast
+                        visible: !!mainWindow.conference
+                        //: Partager l'écran…
+                        ToolTip.text: qsTr("call_share_screen_hint")
+                        Accessible.name: qsTr("call_share_screen_hint")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        onToggled: {
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(screencastPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                        
+                    }
+
+                    // Chat panel button
+                    CheckableButton {
+                        id: chatPanelButton
+                        visible: !SettingsCpp.disableChatFeature && (!mainWindow.conference || mainWindow.conference.core.isChatEnabled)
+                        iconUrl: AppIcons.chatTeardropText
+                        //: Open chat…
+                        ToolTip.text: qsTr("call_open_chat_hint")
+                        Accessible.name: qsTr("call_open_chat_hint")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        KeyNavigation.tab: mainWindow.conference 
+                            ? participantListButton
+                            : moreOptionsButton
+                        UnreadNotification {
+                            anchors.top: parent.top
+                            anchors.right: parent.right
+                            unread: mainWindow.chat ? mainWindow.chat.core.unreadMessagesCount : 0
+                        }
+                        onToggled: {
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(chatPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                    }
+
+                    // Raise hand button
+                    CheckableButton {
+                        id: raiseHandButton
+                        visible: false
+                        checkable: false
+                        iconUrl: AppIcons.handWaving
+                        //: "Lever la main"
+                        ToolTip.text: qsTr("call_rise_hand_hint")
+                        Accessible.name: qsTr("call_rise_hand_hint")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                    }
+
+                    // Reaction button
+                    CheckableButton {
+                        id: reactionButton
+                        visible: false
+                        iconUrl: AppIcons.smiley
+                        //: "Envoyer une réaction"
+                        ToolTip.text: qsTr("call_send_reaction_hint")
+                        Accessible.name: qsTr("call_send_reaction_hint")
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                    }
+
+                    // Participant list button
+                    CheckableButton {
+                        id: participantListButton
+                        //: "Gérer les participants"
+                        ToolTip.text: qsTr("call_manage_participants_hint")
+                        Accessible.name: qsTr("call_manage_participants_hint")
+                        visible: mainWindow.conference
+                        iconUrl: AppIcons.usersTwo
+                        Layout.preferredWidth: Utils.getSizeWithScreenRatio(55)
+                        Layout.preferredHeight: Utils.getSizeWithScreenRatio(55)
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        onToggled: {
+                            if (checked) {
+                                rightPanel.visible = true
+                                rightPanel.replace(participantListPanel)
+                            } else {
+                                rightPanel.visible = false
+                            }
+                        }
+                    }
+
+                    // More option button
+                    PopupButton {
+                        id: moreOptionsButton
+                        //: "Plus d'options…"
+                        ToolTip.text: qsTr("call_more_options_hint")
+                        popUpTitle: qsTr("call_more_options_hint")
+                        implicitWidth: Utils.getSizeWithScreenRatio(55)
+                        implicitHeight: Utils.getSizeWithScreenRatio(55)
+                        popup.topPadding: Utils.getSizeWithScreenRatio(20)
+                        popup.bottomPadding: Utils.getSizeWithScreenRatio(20)
+                        popup.leftPadding: Utils.getSizeWithScreenRatio(10)
+                        popup.rightPadding: Utils.getSizeWithScreenRatio(10)
+                        style: ButtonStyle.checkable
+                        icon.width: Utils.getSizeWithScreenRatio(32)
+                        icon.height: Utils.getSizeWithScreenRatio(32)
+                        KeyNavigation.tab: connectedCallButtons.visible ? pauseButton : nextItemInFocusChain()
+                        visible: bottomButtonsLayout.moreOptionsButtonVisibility
+
+                        Connections {
+                            target: moreOptionsButton.popup
+                            function onOpened() {
+                                moreOptionsButton.popup.y = -moreOptionsButton.popup.height
+                                        - moreOptionsButton.popup.padding
+                            }
+                        }
+                        popup.contentItem: ColumnLayout {
+                            id: optionsList
+                            spacing: Utils.getSizeWithScreenRatio(5)
+
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                visible: mainWindow.conference
+                                icon.source: AppIcons.layout
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                //: "Modifier la disposition"
+                                text: qsTr("call_action_change_conference_layout")
+                                style: ButtonStyle.noBackground
+                                onClicked: {
+                                    rightPanel.visible = true
+                                    rightPanel.replace(changeLayoutPanel)
+                                    moreOptionsButton.close()
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(0) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(0) : null
+                            }
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                icon.source: AppIcons.fullscreen
+                                //: "Mode Plein écran"
+                                text: qsTr("call_action_full_screen")
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                checkable: true
+                                style: ButtonStyle.noBackground
+                                Binding on checked {
+                                    value: mainWindow.visibility === Window.FullScreen
+                                }
+                                onToggled: {
+                                    if (checked) {
+                                        mainWindow.showFullScreen()
+                                    } else {
+                                        mainWindow.showNormal()
+                                    }
+                                    moreOptionsButton.close()
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(1) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(1) : null
+                            }
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                icon.source: AppIcons.dialer
+                                text: qsTr("call_action_show_dialer")
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                style: ButtonStyle.noBackground
+                                onClicked: {
+                                    rightPanel.visible = true
+                                    rightPanel.replace(dialerPanel)
+                                    moreOptionsButton.close()
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(2) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(2) : null
+                            }
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                checkable: true
+                                style: ButtonStyle.noBackground
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                visible: mainWindow.call
+                                         && !mainWindow.conference
+                                         && !SettingsCpp.disableCallRecordings
+                                enabled: mainWindow.call
+                                         && mainWindow.call.core.recordable
+                                icon.source: AppIcons.recordFill
+                                checked: mainWindow.call
+                                         && mainWindow.call.core.recording
+                                hoveredImageColor: contentImageColor
+                                contentImageColor: mainWindow.call
+                                                   && mainWindow.call.core.recording ? DefaultStyle.danger_500_main : DefaultStyle.main2_500_main
+                                text: mainWindow.call && mainWindow.call.core.recording
+                                    //: "Terminer l'enregistrement"
+                                    ? qsTr("call_action_stop_recording")
+                                    //: "Enregistrer l'appel"
+                                    : qsTr("call_action_record")
+                                textColor: mainWindow.call
+                                           && mainWindow.call.core.recording ? DefaultStyle.danger_500_main : DefaultStyle.main2_500_main
+                                hoveredTextColor: textColor
+                                onToggled: {
+                                    if (mainWindow.call)
+                                        if (mainWindow.call.core.recording)
+                                            mainWindow.call.core.lStopRecording(
+                                                        )
+                                        else
+                                            mainWindow.call.core.lStartRecording()
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(3) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(3) : null
+                            }
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                checkable: true
+                                style: ButtonStyle.noBackground
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                icon.source: !mainWindow.call
+                                             || mainWindow.call.core.speakerMuted ? AppIcons.speakerSlash : AppIcons.speaker
+                                contentImageColor: mainWindow.call
+                                                   && mainWindow.call.core.speakerMuted ? DefaultStyle.danger_500_main : DefaultStyle.main2_500_main
+                                hoveredImageColor: contentImageColor
+                                text: mainWindow.call && mainWindow.call.core.speakerMuted
+                                    //: "Activer le son"
+                                    ? qsTr("call_activate_speaker_hint")
+                                    //: "Désactiver le son"
+                                    : qsTr("call_deactivate_speaker_hint")
+                                textColor: mainWindow.call
+                                           && mainWindow.call.core.speakerMuted ? DefaultStyle.danger_500_main : DefaultStyle.main2_500_main
+                                hoveredTextColor: textColor
+                                onCheckedChanged: {
+                                    if (mainWindow.call)
+                                        mainWindow.call.core.lSetSpeakerMuted(
+                                                    !mainWindow.call.core.speakerMuted)
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(4) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(4) : null
+                            }
+                            IconLabelButton {
+                                Layout.fillWidth: true
+                                icon.source: AppIcons.settings
+                                icon.width: Utils.getSizeWithScreenRatio(32)
+                                icon.height: Utils.getSizeWithScreenRatio(32)
+                                //: "Paramètres"
+                                text: qsTr("call_action_go_to_settings")
+                                style: ButtonStyle.noBackground
+                                onClicked: {
+                                    rightPanel.visible = true
+                                    rightPanel.replace(settingsPanel)
+                                    moreOptionsButton.close()
+                                }
+                                KeyNavigation.up: visibleChildren.length != 0 ? moreOptionsButton.getPreviousItem(5) : null
+                                KeyNavigation.down: visibleChildren.length != 0 ? moreOptionsButton.getNextItem(5) : null
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

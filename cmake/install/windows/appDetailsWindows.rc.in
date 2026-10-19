@@ -1,0 +1,51 @@
+A ICON MOVEABLE PURE LOADONCALL DISCARDABLE "data/icon.ico"
+
+# if defined(UNDER_CE)
+#  include <winbase.h>
+# else
+#  include <winver.h>
+# endif
+
+VS_VERSION_INFO VERSIONINFO
+    PRODUCTVERSION ${LINPHONE_MAJOR_VERSION},${LINPHONE_MINOR_VERSION},${LINPHONE_MICRO_VERSION},0
+    FILEVERSION ${LINPHONE_MAJOR_VERSION},${LINPHONE_MINOR_VERSION},${LINPHONE_MICRO_VERSION},0
+    FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+    FILEFLAGS VS_FF_DEBUG
+#else
+    FILEFLAGS 0x0L
+#endif
+    FILEOS VOS__WINDOWS32
+    FILETYPE VFT_APP
+    FILESUBTYPE 0x0L
+    BEGIN
+        BLOCK "StringFileInfo"
+        BEGIN
+            BLOCK "040904B0"
+            BEGIN
+                VALUE "CompanyName", "${APPLICATION_VENDOR}\0"
+                VALUE "FileDescription", "${APPLICATION_NAME} - ${APPLICATION_DESCRIPTION}\0"
+                /* Gastecom 2026-08-17: antes ponia ${FULL_VERSION} y
+                   ${version_major}.${version_minor}.${version_patch}, variables que
+                   NO existen en este proyecto. Quedaban asi en el .rc generado:
+                       VALUE "FileVersion", ""
+                       VALUE "ProductVersion", "..\0"
+                   El primero, vacio y sin el \0 de cierre, deja el bloque
+                   VS_VERSION_INFO malformado, y entonces Windows no lee NINGUN
+                   campo: ProductName, CompanyName y FileDescription salian vacios
+                   aunque el .rc los llevara bien, y el registro de eventos daba
+                   "version 0.0.0.0". Se usan las variables que si estan definidas,
+                   las mismas de FILEVERSION unas lineas arriba. */
+                VALUE "FileVersion", "${LINPHONE_MAJOR_VERSION}.${LINPHONE_MINOR_VERSION}.${LINPHONE_MICRO_VERSION}\0"
+                VALUE "ProductVersion", "${LINPHONE_MAJOR_VERSION}.${LINPHONE_MINOR_VERSION}.${LINPHONE_MICRO_VERSION}\0"
+                VALUE "LegalCopyright", "Copyright (C) ${COPYRIGHT_RANGE_DATE} ${APPLICATION_VENDOR} ${APPLICATION_URL}\0"
+                VALUE "OriginalFilename", "${EXECUTABLE_NAME}.exe\0"
+                VALUE "ProductName", "${APPLICATION_NAME}\0"
+            END
+        END
+        BLOCK "VarFileInfo"
+        BEGIN
+            VALUE "Translation", 0x409, 1200
+        END
+    END
+/* End of Version info */

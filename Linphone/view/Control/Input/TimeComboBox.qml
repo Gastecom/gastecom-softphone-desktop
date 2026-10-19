@@ -1,0 +1,107 @@
+import QtQuick
+import Linphone
+import UtilsCpp
+import "qrc:/qt/qml/Linphone/view/Control/Tool/Helper/utils.js" as Utils
+
+ComboBox {
+	id: mainItem
+	indicatorRightMargin: Utils.getSizeWithScreenRatio(10)
+	property var selectedDateTime
+	onSelectedDateTimeChanged: {
+		selectedTimeString = ""
+		if (minTime != undefined) {
+			if (UtilsCpp.timeOffset(minTime, selectedDateTime) < 0)
+				selectedDateTime = minTime
+		}
+		if (maxTime != undefined) {
+			if (UtilsCpp.timeOffset(maxTime, selectedDateTime) > 0)
+				selectedDateTime = maxTime
+		}
+		selectedTimeString = Qt.formatDateTime(selectedDateTime, "hh:mm")
+	}
+	property string selectedTimeString: Qt.formatDateTime(selectedDateTime, "hh:mm")
+	property int selectedHour: input.hour*1
+	property int selectedMin: input.min*1
+	property alias contentText: input
+	property var minTime
+	property var maxTime
+    popup.width: Utils.getSizeWithScreenRatio(73)
+	listView.model: 48
+    listView.height: Math.min(Utils.getSizeWithScreenRatio(204), listView.contentHeight)
+    popup.height: Math.min(Utils.getSizeWithScreenRatio(204), listView.contentHeight)
+	editable: true
+	popup.closePolicy: Popup.PressOutsideParent | Popup.CloseOnPressOutside
+	onCurrentTextChanged: input.text = currentText
+	popup.onOpened: {
+		input.forceActiveFocus()
+	}
+
+	contentItem: TextInput {
+		id: input
+		validator: IntValidator{}
+		// activeFocusOnPress: false
+		inputMask: "00:00"
+		verticalAlignment: TextInput.AlignVCenter
+		horizontalAlignment: TextInput.AlignHCenter
+		property string hour: text.split(":")[0]
+		property string min: text.split(":")[1]
+		color: DefaultStyle.main2_600
+		onActiveFocusChanged: {
+			if (activeFocus) {
+				selectAll()
+			} else {
+				listView.currentIndex = -1
+				mainItem.selectedDateTime = UtilsCpp.createDateTime(mainItem.selectedDateTime, hour, min)
+			}
+		}
+		font {
+            pixelSize: Typography.p2l.pixelSize
+            weight: Typography.p2l.weight
+		}
+		text: mainItem.selectedTimeString
+		Keys.onPressed: (event) => {
+			if (event.key == Qt.Key_Enter || event.key == Qt.Key_Return) {
+				focus = false
+				mainItem.forceActiveFocus()
+			} else if (event.key == Qt.Key_Space) {
+				if (mainItem.popup.opened) mainItem.popup.close()
+				else mainItem.popup.open()
+				event.accepted = true
+			}
+		}
+		onFocusChanged: if (!focus) {
+			mainItem.selectedDateTime = UtilsCpp.createDateTime(mainItem.selectedDateTime, hour, min)
+		}
+	}
+	listView.delegate: Text {
+		id: hourDelegate
+		property int hour: modelData /2
+		property int min: modelData%2 === 0 ? 0 : 30
+		property var currentDateTime: UtilsCpp.createDateTime(mainItem.selectedDateTime, hour, min)
+		text: Qt.formatDateTime(currentDateTime, "hh:mm")
+		width: mainItem.width
+		visible: mainItem.minTime == undefined || UtilsCpp.timeOffset(mainItem.minTime, currentDateTime) > 0
+        height: visible ? Utils.getSizeWithScreenRatio(25) : 0
+		verticalAlignment: TextInput.AlignVCenter
+		horizontalAlignment: TextInput.AlignHCenter
+		font {
+            pixelSize: Typography.p1.pixelSize
+            weight: Typography.p1.weight
+		}
+		MouseArea {
+			anchors.fill: parent
+			hoverEnabled: true
+			cursorShape: containsMouse ? Qt.PointingHandCursor : Qt.ArrowCursor
+			onClicked: {
+				// mainItem.text = parent.text
+				mainItem.listView.currentIndex = index
+				mainItem.selectedDateTime = UtilsCpp.createDateTime(mainItem.selectedDateTime, hour, min)
+				mainItem.popup.close()
+			}
+			Rectangle {
+				visible: parent.containsMouse
+				color: DefaultStyle.main2_200
+			}
+		}
+	}
+}

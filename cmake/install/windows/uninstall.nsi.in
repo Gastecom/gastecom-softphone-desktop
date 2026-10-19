@@ -1,0 +1,37 @@
+ClearErrors
+ExecWait '"cmd" /C ""%SystemRoot%\System32\tasklist" /NH /FI "IMAGENAME eq @CPACK_NSIS_MUI_FINISHPAGE_RUN@" | "%SystemRoot%\System32\find" /I /C "@CPACK_NSIS_MUI_FINISHPAGE_RUN@""' $0
+IntCmp $0 1 notRunningInUninstall
+MessageBox MB_OK|MB_ICONEXCLAMATION "@CPACK_NSIS_MUI_FINISHPAGE_RUN@ is running. Please close it first from the application menu and restart the installation." /SD IDOK
+Abort
+
+notRunningInUninstall:
+
+## Application
+
+DeleteRegKey HKLM "SOFTWARE\IM Providers\@APPLICATION_NAME@"
+DeleteRegKey HKLM "SOFTWARE\@APPLICATION_VENDOR@\@APPLICATION_NAME@"
+DeleteRegValue HKLM "SOFTWARE\RegisteredApplications" "@APPLICATION_NAME@"
+
+## Handlers
+
+DeleteRegKey HKCR "@APPLICATION_NAME@.sip"
+DeleteRegKey HKCR "@APPLICATION_NAME@.sip-@EXECUTABLE_NAME@"
+DeleteRegKey HKCR "@APPLICATION_NAME@.sips"
+DeleteRegKey HKCR "@APPLICATION_NAME@.sips-@EXECUTABLE_NAME@"
+DeleteRegKey HKCR "@APPLICATION_NAME@.@EXECUTABLE_NAME@-config"
+DeleteRegKey HKCR "@APPLICATION_NAME@.tel"
+DeleteRegKey HKCR "@APPLICATION_NAME@.callto"
+
+; Gastecom (2026-10-14): el instalador escribe comandos DIRECTOS en tel,
+; callto y @EXECUTABLE_NAME@-config (ver install.nsi.in). Sin esto, tras
+; desinstalar quedaban apuntando a un .exe que ya no existe. En tel/callto
+; solo se borra el comando si sigue siendo el nuestro: si otra app de
+; telefonia lo tomo despues, no se le rompe.
+ReadRegStr $0 HKCR "tel\Shell\Open\Command" ""
+StrCmp $0 "$\"$INSTDIR\bin\@EXECUTABLE_NAME@.exe$\" $\"%1$\"" 0 +2
+DeleteRegKey HKCR "tel\Shell\Open\Command"
+ReadRegStr $0 HKCR "callto\Shell\Open\Command" ""
+StrCmp $0 "$\"$INSTDIR\bin\@EXECUTABLE_NAME@.exe$\" $\"%1$\"" 0 +2
+DeleteRegKey HKCR "callto\Shell\Open\Command"
+DeleteRegKey HKCR "@EXECUTABLE_NAME@-config"
+

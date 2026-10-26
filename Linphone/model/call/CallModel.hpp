@@ -88,6 +88,7 @@ public:
 	static void activateLocalVideo(std::shared_ptr<linphone::CallParams> &params, bool enable);
 
 	void sendDtmf(const QString &dtmf);
+	void sendDtmfs(const std::string &dtmfs); // Gastecom: secuencia (p.ej. *2 de grabar en centralita)
 
 	void updateCallErrorFromReason(linphone::Reason reason);
 

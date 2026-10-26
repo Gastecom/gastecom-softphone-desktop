@@ -208,11 +208,20 @@ void CallCore::setSelf(QSharedPointer<CallCore> me) {
 	mCallModelConnection->makeConnectToCore(&CallCore::lSetCameraEnabled, [this](bool enabled) {
 		mCallModelConnection->invokeToModel([this, enabled]() { mCallModel->setCameraEnabled(enabled); });
 	});
+	// Gastecom: el boton Grabar no graba en el PC, pide a la centralita (IvozProvider /
+	// CommsMundi) que grabe con el codigo *2 por DTMF; la misma tecla otra vez la para.
+	// La app no sabe el estado real de la centralita: mRecording solo pinta el indicador.
 	mCallModelConnection->makeConnectToCore(&CallCore::lStartRecording, [this]() {
-		mCallModelConnection->invokeToModel([this]() { mCallModel->startRecording(); });
+		mCallModelConnection->invokeToModel([this]() {
+			mCallModel->sendDtmfs("*2");
+			mCallModelConnection->invokeToCore([this]() { setRecording(true); });
+		});
 	});
 	mCallModelConnection->makeConnectToCore(&CallCore::lStopRecording, [this]() {
-		mCallModelConnection->invokeToModel([this]() { mCallModel->stopRecording(); });
+		mCallModelConnection->invokeToModel([this]() {
+			mCallModel->sendDtmfs("*2");
+			mCallModelConnection->invokeToCore([this]() { setRecording(false); });
+		});
 	});
 	mCallModelConnection->makeConnectToModel(
 	    &CallModel::recordingChanged, [this](const std::shared_ptr<linphone::Call> &call, bool recording) {

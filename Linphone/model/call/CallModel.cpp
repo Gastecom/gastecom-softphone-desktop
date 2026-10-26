@@ -377,6 +377,11 @@ void CallModel::sendDtmf(const QString &dtmf) {
 	CoreModel::getInstance()->getCore()->playDtmf(key, gDtmfSoundDelay);
 }
 
+void CallModel::sendDtmfs(const std::string &dtmfs) {
+	lInfo() << log().arg("Send dtmfs: `%1`.").arg(QString::fromStdString(dtmfs));
+	if (mMonitor) mMonitor->sendDtmfs(dtmfs);
+}
+
 void CallModel::updateCallErrorFromReason(linphone::Reason reason) {
 	QString error;
 	lDebug() << log().arg("call Error reason") << (int)reason;
